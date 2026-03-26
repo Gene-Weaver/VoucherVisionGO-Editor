@@ -20,7 +20,16 @@ Every field from the VoucherVision transcription must be individually accepted b
 
 - **macOS:** Open the `.dmg` and drag the app to Applications.
 - **Windows:** Double-click the `.exe` — it's portable, no installation or admin rights needed.
-- **Linux:** `chmod +x *.AppImage` then double-click or run it.
+- **Linux:** Make it executable and run it:
+  ```bash
+  chmod a+x VoucherVisionGO.Editor-1.0.0.AppImage
+  ./VoucherVisionGO.Editor-1.0.0.AppImage
+  ```
+  If you see an error about `libfuse.so.2` (common on Ubuntu 22.04+), install the FUSE 2 library:
+  ```bash
+  sudo apt install libfuse2
+  ```
+  Then run the AppImage again with `./VoucherVisionGO.Editor-1.0.0.AppImage`.
 
 ---
 
