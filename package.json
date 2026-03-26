@@ -9,7 +9,7 @@
     "dist": "electron-builder"
   },
   "author": "Will Weaver",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "devDependencies": {
     "electron": "^28.3.3",
     "electron-builder": "^25.0.0"
