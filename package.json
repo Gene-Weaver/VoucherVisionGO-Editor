@@ -1,0 +1,46 @@
+{
+  "name": "vouchervisiongo-editor",
+  "version": "1.0.0",
+  "description": "Lightweight desktop editor for reviewing VoucherVisionGO transcription results",
+  "main": "main.js",
+  "scripts": {
+    "start": "unset ELECTRON_RUN_AS_NODE && electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "author": "Will Weaver",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "xlsx": "^0.18.5"
+  },
+  "build": {
+    "appId": "com.vouchervision.go-editor",
+    "productName": "VoucherVisionGO Editor",
+    "directories": {
+      "output": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+build/
+dist/
+test_data/
+*.log
+.DS_Store
+Thumbs.db
+"test_data copy/"
+test_data copy/
