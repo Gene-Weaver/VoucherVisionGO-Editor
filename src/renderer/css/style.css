@@ -504,6 +504,21 @@ textarea { resize: vertical; min-height: 60px; }
   padding: 4px 8px 2px;
 }
 
+/* Compact mode: add spacer columns for label and flair */
+.compact-view .field-row-headers {
+  grid-template-columns: auto 1fr auto 1fr auto;
+}
+
+.compact-view .field-row-headers::before {
+  content: '';
+  display: block;
+}
+
+.compact-view .field-row-headers::after {
+  content: '';
+  display: block;
+}
+
 .field-col-header {
   font-size: 10px;
   color: var(--text-muted);
@@ -866,10 +881,212 @@ textarea { resize: vertical; min-height: 60px; }
   font-size: 13px;
 }
 
-/* ── Map ───────────────────────────────────────────────── */
+/* ── Map + Elevation ───────────────────────────────────── */
+
+.map-elev-row {
+  display: flex;
+  gap: 0;
+  min-height: 200px;
+}
+
+.map-elev-row .map-container {
+  flex: 7;
+  min-height: 200px;
+}
+
+.elev-calculator {
+  flex: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border);
+}
+
+.elev-calc-section {
+  flex: 7;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px;
+}
+
+.elev-calc-title {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.elev-calc-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.elev-calc-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.elev-calc-field label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.elev-calc-input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.elev-calc-input:focus {
+  border-color: var(--accent);
+  cursor: text;
+}
+
+.elev-calc-arrow {
+  color: var(--text-muted);
+  font-size: 16px;
+  margin-top: 14px;
+}
+
+/* Toast */
+.elev-toast {
+  font-size: 10px;
+  color: var(--accent);
+  text-align: center;
+  padding: 4px 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  height: 20px;
+}
+
+.elev-toast.visible {
+  opacity: 1;
+}
+
+/* COP90 section */
+.elev-cop90-section {
+  flex: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.elev-cop90-values {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.elev-cop90-sep {
+  color: var(--text-muted);
+}
+
+.elev-copy-btn {
+  display: block;
+  width: 100%;
+  padding: 1px 0;
+  margin-top: 2px;
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--transition);
+  text-align: center;
+}
+
+.elev-copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(46, 204, 113, 0.1);
+}
+
+.elev-cop90-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.elev-cop90-item span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.elev-cop90-item .elev-copy-btn {
+  width: auto;
+  padding: 1px 10px;
+}
 
 .map-container {
   height: 200px;
+}
+
+/* ── OCR + WFO Row ─────────────────────────────────────── */
+
+.ocr-wfo-row {
+  display: flex;
+  min-height: 120px;
+  overflow: hidden;
+}
+
+.ocr-wfo-pane {
+  flex: 1;
+  min-width: 100px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ocr-wfo-pane:first-child {
+  width: 50%;
+  flex-shrink: 0;
+}
+
+.ocr-wfo-pane > .collapsible-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ocr-wfo-pane > .collapsible-panel .collapsible-body {
+  flex: 1;
+  overflow: hidden;
+}
+
+.ocr-wfo-pane .scrollable-content {
+  max-height: none;
+  height: 100%;
 }
 
 /* ── Collapsible Panels ────────────────────────────────── */
@@ -1747,9 +1964,6 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── Compact View ──────────────────────────────────────── */
 
-.compact-view .field-row-headers {
-  grid-template-columns: auto 1fr auto 1fr auto;
-}
 
 .compact-view .field-row {
   grid-template-columns: auto 1fr auto 1fr auto;

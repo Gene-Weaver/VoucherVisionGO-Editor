@@ -7,7 +7,6 @@ const SETTINGS_FILENAME = '_vvgo_editor_settings.json';
 const DEFAULT_SETTINGS = {
   version: 1,
   acceptAllEnabled: false,
-  expandedView: false,
   mapTheme: 'dark',
   rowColorOdd: '#2f2f2f',
   rowColorEven: '#242424',

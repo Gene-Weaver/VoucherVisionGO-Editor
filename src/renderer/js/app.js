@@ -21,7 +21,7 @@ const APP = {
   elevationCollapsed: false,
   username: '',
   settings: {
-    acceptAllEnabled: false, expandedView: false, mapTheme: 'dark',
+    acceptAllEnabled: false, mapTheme: 'dark',
     rowColorOdd: '#2f2f2f', rowColorEven: '#242424',
     catColors: { cat0: '#479EF5', cat1: '#CA50F7', cat2: '#48CA48', cat3: '#A0A220', cat4: '#FF5C5C', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' },
   },
@@ -199,7 +199,7 @@ async function loadFolder(folderPath) {
   APP.settings = await window.api.loadSettings(folderPath);
   APP.mapTheme = APP.settings.mapTheme || 'dark';
   applyThemeColors();
-  if (!APP.settings.expandedView) document.body.classList.add('compact-view');
+  document.body.classList.add('compact-view');
 
   // Load persisted state
   APP.state = await window.api.loadState(folderPath);
@@ -406,9 +406,11 @@ async function renderLeftPanel() {
     <div class="resize-handle-v" id="image-resize-handle-v"></div>
     <div class="panel-right-info">
       <div id="map-viewer-container"></div>
-      <div id="ocr-panel-container"></div>
-      <div id="wfo-panel-container"></div>
-      <div id="elevation-panel-container"></div>
+      <div class="ocr-wfo-row" id="ocr-wfo-row">
+        <div class="ocr-wfo-pane" id="ocr-panel-container"></div>
+        <div class="resize-handle" id="ocr-wfo-resize-handle"></div>
+        <div class="ocr-wfo-pane" id="wfo-panel-container"></div>
+      </div>
       <div id="prompt-panel-container"></div>
     </div>
   `;
@@ -428,11 +430,13 @@ async function renderLeftPanel() {
   renderMap();
   renderOcrPanel();
   renderWfoPanel();
-  renderElevationPanel();
   renderPromptPanel();
 
   // Vertical resize for image panel
   initResizeHandleV('image-resize-handle-v', 'panel-right-image', 'panel-left', 0.25, 0.75);
+
+  // Horizontal resize between OCR and WFO
+  initResizeHandle('ocr-wfo-resize-handle', 'ocr-panel-container', 'ocr-wfo-row', 0.25, 0.75);
 }
 
 function makeCollapsiblePanel(containerId, title, contentHtml, collapsedKey, extraHeaderHtml = '') {
@@ -543,8 +547,61 @@ function renderMap() {
     ${mapSwitch.html}
   `;
 
+  // Find elevation value from formatted_json fields
+  const fj2 = APP.currentSpecimen.formatted_json || {};
+  let elevMeters = '';
+  for (const [key, val] of Object.entries(fj2)) {
+    if (/elevation|altitude/i.test(key) && val !== '' && val !== undefined) {
+      const num = parseFloat(String(val));
+      if (!isNaN(num)) { elevMeters = num; break; }
+    }
+  }
+  // Also check COP90
+  if (elevMeters === '' && APP.currentSpecimen.COP90_elevation_m !== undefined && APP.currentSpecimen.COP90_elevation_m !== '' && APP.currentSpecimen.COP90_elevation_m !== 'None') {
+    const cop = parseFloat(APP.currentSpecimen.COP90_elevation_m);
+    if (!isNaN(cop)) elevMeters = cop;
+  }
+  const elevFeet = elevMeters !== '' ? (elevMeters * 3.28084).toFixed(1) : '';
+
   makeCollapsiblePanel('map-viewer-container', 'Map',
-    `<div class="map-container" id="map-container"></div>`,
+    `<div class="map-elev-row">
+      <div class="map-container" id="map-container"></div>
+      <div class="elev-calculator">
+        <div class="elev-calc-section">
+          <div class="elev-calc-title">Elevation Calculator</div>
+          <div class="elev-calc-fields">
+            <div class="elev-calc-field">
+              <label>Meters</label>
+              <div class="elev-calc-input" contenteditable="true" id="elev-meters">${elevMeters !== '' ? elevMeters : ''}</div>
+              <button class="elev-copy-btn elev-copyable" data-target="elev-meters">copy</button>
+            </div>
+            <div class="elev-calc-arrow">&#8596;</div>
+            <div class="elev-calc-field">
+              <label>Feet</label>
+              <div class="elev-calc-input" contenteditable="true" id="elev-feet">${elevFeet}</div>
+              <button class="elev-copy-btn elev-copyable" data-target="elev-feet">copy</button>
+            </div>
+          </div>
+        </div>
+        <div class="elev-toast" id="elev-toast">Copied to clipboard</div>
+        ${APP.currentSpecimen.COP90_elevation_m !== undefined && APP.currentSpecimen.COP90_elevation_m !== '' && APP.currentSpecimen.COP90_elevation_m !== 'None'
+          ? `<div class="elev-cop90-section">
+              <div class="elev-calc-title">COP90 at GPS Location</div>
+              <div class="elev-cop90-values">
+                <div class="elev-cop90-item">
+                  <span id="cop90-meters">${APP.currentSpecimen.COP90_elevation_m} m</span>
+                  <button class="elev-copy-btn elev-copyable" data-target="cop90-meters">copy</button>
+                </div>
+                <span class="elev-cop90-sep">|</span>
+                <div class="elev-cop90-item">
+                  <span id="cop90-feet">${(parseFloat(APP.currentSpecimen.COP90_elevation_m) * 3.28084).toFixed(1)} ft</span>
+                  <button class="elev-copy-btn elev-copyable" data-target="cop90-feet">copy</button>
+                </div>
+              </div>
+            </div>`
+          : ''}
+      </div>
+    </div>`,
     'mapCollapsed', extraHeaderHtml);
 
   // Setup slide switch (after DOM insertion)
@@ -553,6 +610,43 @@ function renderMap() {
   if (APP.mapCollapsed) return;
 
   initMap(lat, lng);
+
+  // Elevation calculator bidirectional conversion
+  const metersEl = document.getElementById('elev-meters');
+  const feetEl = document.getElementById('elev-feet');
+  if (metersEl && feetEl) {
+    metersEl.addEventListener('input', () => {
+      const m = parseFloat(metersEl.textContent.replace(/[^\d.\-]/g, ''));
+      feetEl.textContent = isNaN(m) ? '' : (m * 3.28084).toFixed(1);
+    });
+    feetEl.addEventListener('input', () => {
+      const ft = parseFloat(feetEl.textContent.replace(/[^\d.\-]/g, ''));
+      metersEl.textContent = isNaN(ft) ? '' : (ft / 3.28084).toFixed(1);
+    });
+    // Prevent newlines
+    [metersEl, feetEl].forEach(el => {
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+    });
+  }
+
+  // Copy to clipboard on click for copy buttons
+  container.querySelectorAll('.elev-copy-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const targetEl = document.getElementById(btn.dataset.target);
+      if (!targetEl) return;
+      const text = targetEl.textContent.replace(/[^\d.\-]/g, '').trim();
+      if (text) {
+        navigator.clipboard.writeText(text);
+        const toast = document.getElementById('elev-toast');
+        if (toast) {
+          toast.classList.add('visible');
+          setTimeout(() => toast.classList.remove('visible'), 1500);
+        }
+      }
+    });
+  });
 
   // Re-init map when expanding from collapsed
   container.querySelector('.collapsible-header').addEventListener('click', () => {
@@ -1063,14 +1157,12 @@ function alignFieldLabels(container) {
     l.style.width = widthPx;
   });
 
-  // Also update the grid column for compact view
-  if (document.body.classList.contains('compact-view')) {
-    container.querySelectorAll('.field-row').forEach(row => {
-      row.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
-    });
-    const headers = container.querySelector('.field-row-headers');
-    if (headers) headers.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
-  }
+  // Update grid columns to match label width
+  container.querySelectorAll('.field-row').forEach(row => {
+    row.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
+  });
+  const headers = container.querySelector('.field-row-headers');
+  if (headers) headers.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
 }
 
 function getStatusLabel(source) {
@@ -1592,7 +1684,7 @@ function initResizeHandle(handleId, panelId, containerId, minRatio, maxRatio) {
     let ratio = (e.clientX - rect.left) / rect.width;
     ratio = Math.max(minRatio, Math.min(maxRatio, ratio));
     panel.style.width = (ratio * 100) + '%';
-    panel.style.flexShrink = '0';
+    panel.style.flex = 'none';
   });
 
   document.addEventListener('mouseup', () => {
@@ -3056,16 +3148,6 @@ function openSettingsPopup() {
         </div>
       </div>
 
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Expanded View</div>
-          <div class="settings-desc">Show field names and status badges on a separate line above the text inputs (default is compact/inline)</div>
-        </div>
-        <div class="table-lock-toggle ${APP.settings.expandedView ? 'unlocked' : 'locked'}" id="setting-expanded-view">
-          <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span class="table-lock-label" style="text-transform:none">${APP.settings.expandedView ? 'Enabled' : 'Disabled'}</span>
-        </div>
-      </div>
 
       <div class="settings-row" style="flex-direction:column;align-items:stretch">
         <div class="settings-label" style="margin-bottom:8px">
@@ -3135,16 +3217,6 @@ function openSettingsPopup() {
     toggle.classList.toggle('locked', !APP.settings.acceptAllEnabled);
     toggle.classList.toggle('unlocked', APP.settings.acceptAllEnabled);
     toggle.querySelector('.table-lock-label').textContent = APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled';
-  });
-
-  // Compact view toggle
-  document.getElementById('setting-expanded-view').addEventListener('click', () => {
-    APP.settings.expandedView = !APP.settings.expandedView;
-    const toggle = document.getElementById('setting-expanded-view');
-    toggle.classList.toggle('locked', !APP.settings.expandedView);
-    toggle.classList.toggle('unlocked', APP.settings.expandedView);
-    toggle.querySelector('.table-lock-label').textContent = APP.settings.expandedView ? 'Enabled' : 'Disabled';
-    document.body.classList.toggle('compact-view', !APP.settings.expandedView);
   });
 
   // Row gray sliders
