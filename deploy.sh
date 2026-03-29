@@ -52,11 +52,41 @@ echo ""
 echo "=== Demo ==="
 ls -lh "$WEBPAGE_DIR/editor-demo.html"
 echo ""
-echo "Done! To create a GitHub release:"
-echo "  gh release create v1.0.0 \\"
-echo "    \"build/VoucherVisionGO Editor-1.0.0-arm64.dmg\" \\"
-echo "    \"build/VoucherVisionGO Editor-1.0.0.dmg\" \\"
-echo "    \"build/VoucherVisionGO Editor 1.0.0.exe\" \\"
-echo "    \"build/VoucherVisionGO Editor-1.0.0.AppImage\" \\"
-echo "    --title \"VoucherVisionGO Editor v1.0.0\" \\"
-echo "    --notes \"See README for details\""
+# 5. Read version from package.json
+VERSION=$(node -e "console.log(require('./package.json').version)")
+TAG="v${VERSION}"
+echo "Version: $VERSION  Tag: $TAG"
+echo ""
+
+# 6. Create GitHub release (unless --skip-release)
+if [ "$1" != "--skip-release" ] && [ "$1" != "--skip-builds" ]; then
+    echo "Creating GitHub release $TAG..."
+
+    # Delete existing release/tag if re-deploying same version
+    gh release delete "$TAG" --repo Gene-Weaver/VoucherVisionGO-Editor --yes 2>/dev/null || true
+    git tag -d "$TAG" 2>/dev/null || true
+    git push origin ":refs/tags/$TAG" 2>/dev/null || true
+
+    gh release create "$TAG" \
+      "build/VoucherVisionGO Editor-${VERSION}-arm64.dmg#macOS (Apple Silicon)" \
+      "build/VoucherVisionGO Editor-${VERSION}.dmg#macOS (Intel)" \
+      "build/VoucherVisionGO Editor ${VERSION}.exe#Windows (64-bit)" \
+      "build/VoucherVisionGO Editor-${VERSION}.AppImage#Linux (64-bit)" \
+      --repo Gene-Weaver/VoucherVisionGO-Editor \
+      --title "VoucherVisionGO Editor $TAG" \
+      --notes "See [README](https://github.com/Gene-Weaver/VoucherVisionGO-Editor#readme) for details and installation instructions."
+
+    echo ""
+    echo "Release created: https://github.com/Gene-Weaver/VoucherVisionGO-Editor/releases/tag/$TAG"
+else
+    echo "Skipping GitHub release"
+    echo ""
+    echo "To release manually:"
+    echo "  gh release create $TAG \\"
+    echo "    \"build/VoucherVisionGO Editor-${VERSION}-arm64.dmg\" \\"
+    echo "    \"build/VoucherVisionGO Editor-${VERSION}.dmg\" \\"
+    echo "    \"build/VoucherVisionGO Editor ${VERSION}.exe\" \\"
+    echo "    \"build/VoucherVisionGO Editor-${VERSION}.AppImage\" \\"
+    echo "    --repo Gene-Weaver/VoucherVisionGO-Editor \\"
+    echo "    --title \"VoucherVisionGO Editor $TAG\""
+fi
