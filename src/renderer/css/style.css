@@ -1399,6 +1399,20 @@ textarea { resize: vertical; min-height: 60px; }
   color: var(--text-primary);
 }
 
+/* Empty cell placeholder */
+.batch-table td .cell-empty-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.7;
+}
+.batch-table td.cell-limbo .cell-empty-placeholder {
+  color: var(--warning);
+  opacity: 0.8;
+}
+.batch-table td.cell-unaccepted .cell-empty-placeholder {
+  color: #b8860b;
+}
+
 /* Limbo state: edited but not confirmed */
 .batch-table td.cell-limbo {
   outline: 2px solid var(--warning);

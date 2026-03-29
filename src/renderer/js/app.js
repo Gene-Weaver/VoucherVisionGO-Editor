@@ -2012,7 +2012,9 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
         const unconfirmed = r.fieldUnconfirmed[f];
         const val = r.fieldValues[f];
         const cls = unconfirmed ? 'cell-limbo' : (accepted ? 'cell-accepted' : 'cell-unaccepted');
-        return `<td class="${cls}" data-field="${escapeAttr(f)}" data-index="${r.index}" title="${escapeAttr(val)}"${unconfirmed ? ` data-limbo-value="${escapeAttr(val)}"` : ''}>${escapeHtml(val)}</td>`;
+        const isEmpty = val === '' || val === undefined || val === null;
+        const displayVal = isEmpty ? '<span class="cell-empty-placeholder">(empty)</span>' : escapeHtml(val);
+        return `<td class="${cls}" data-field="${escapeAttr(f)}" data-index="${r.index}" title="${isEmpty ? '(empty)' : escapeAttr(val)}"${unconfirmed ? ` data-limbo-value="${escapeAttr(val)}"` : ''}>${displayVal}</td>`;
       }).join('')}
     </tr>
   `).join('');
