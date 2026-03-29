@@ -23,9 +23,14 @@ echo ""
 
 # 3. Build app (unless --skip-builds)
 if [ "$1" != "--skip-builds" ]; then
-    echo "Building macOS (arm64)..."
     unset ELECTRON_RUN_AS_NODE
+
+    echo "Building macOS (arm64 - Apple Silicon)..."
     npm run dist -- --mac --arm64 2>&1 | grep -E "building|packaging|signing"
+    echo ""
+
+    echo "Building macOS (x64 - Intel)..."
+    npm run dist -- --mac --x64 2>&1 | grep -E "building|packaging|signing"
     echo ""
 
     echo "Building Windows (x64)..."
@@ -50,7 +55,8 @@ echo ""
 echo "Done! To create a GitHub release:"
 echo "  gh release create v1.0.0 \\"
 echo "    \"build/VoucherVisionGO Editor-1.0.0-arm64.dmg\" \\"
+echo "    \"build/VoucherVisionGO Editor-1.0.0.dmg\" \\"
 echo "    \"build/VoucherVisionGO Editor 1.0.0.exe\" \\"
 echo "    \"build/VoucherVisionGO Editor-1.0.0.AppImage\" \\"
 echo "    --title \"VoucherVisionGO Editor v1.0.0\" \\"
-echo "    --notes \"Initial release\""
+echo "    --notes \"See README for details\""
