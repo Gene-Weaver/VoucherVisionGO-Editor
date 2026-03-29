@@ -21,9 +21,9 @@ const APP = {
   elevationCollapsed: false,
   username: '',
   settings: {
-    acceptAllEnabled: false, compactView: false, mapTheme: 'dark',
+    acceptAllEnabled: false, expandedView: false, mapTheme: 'dark',
     rowColorOdd: '#2f2f2f', rowColorEven: '#242424',
-    catColors: { cat0: '#7fbfff', cat1: '#f6a14f', cat2: '#48ca48', cat3: '#a855a8', cat4: '#ff7f7f', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' },
+    catColors: { cat0: '#479EF5', cat1: '#CA50F7', cat2: '#48CA48', cat3: '#A0A220', cat4: '#FF5C5C', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' },
   },
 
   // Category color assignments
@@ -199,7 +199,7 @@ async function loadFolder(folderPath) {
   APP.settings = await window.api.loadSettings(folderPath);
   APP.mapTheme = APP.settings.mapTheme || 'dark';
   applyThemeColors();
-  if (APP.settings.compactView) document.body.classList.add('compact-view');
+  if (!APP.settings.expandedView) document.body.classList.add('compact-view');
 
   // Load persisted state
   APP.state = await window.api.loadState(folderPath);
@@ -891,31 +891,32 @@ function renderCategoryForm() {
       const aiValue = fj[field] !== undefined ? String(fj[field]) : '';
       const accepted = specState.accepted_fields[field];
       const isResolved = accepted !== undefined;
-      const reviewedValue = isResolved ? accepted.value : '';
-      const source = isResolved ? accepted.source : 'pending';
+      const unconfirmedValue = specState.unconfirmed_fields?.[field];
+      const hasUnconfirmed = unconfirmedValue !== undefined;
+      const reviewedValue = hasUnconfirmed ? unconfirmedValue : (isResolved ? accepted.value : '');
+      const source = hasUnconfirmed ? 'unconfirmed' : (isResolved ? accepted.source : 'pending');
       const isEmpty = aiValue === '';
-      const isLongField = aiValue.length > 80 || ['habitat', 'specimenDescription', 'locality', 'additionalText', 'identificationHistory'].includes(field);
 
       return `
-        <div class="field-row ${isResolved ? 'resolved' : ''}" data-field="${field}" data-source="${source}" data-status="${getStatusLabel(source)}">
-          <div class="field-label" style="color: ${isResolved ? 'var(--text-muted)' : cat.color}">
+        <div class="field-row ${isResolved && !hasUnconfirmed ? 'resolved' : ''} ${hasUnconfirmed ? 'unconfirmed' : ''}" data-field="${field}" data-source="${source}" data-status="${hasUnconfirmed ? 'Unconfirmed Change' : getStatusLabel(source)}">
+          <div class="field-label" style="color: ${isResolved && !hasUnconfirmed ? 'var(--text-muted)' : hasUnconfirmed ? 'var(--warning)' : cat.color}">
             ${escapeHtml(field)}
-            <span class="field-status ${source}">${getStatusLabel(source)}</span>
+            ${!hasUnconfirmed ? `<button class="btn-icon field-uncertain-btn" data-field="${field}" title="Set status to Unconfirmed Change">&#8635;</button>` : ''}
+            <span class="field-status ${source}">${hasUnconfirmed ? 'Unconfirmed Change' : getStatusLabel(source)}</span>
           </div>
           <div class="field-ai-value ${isEmpty ? 'empty' : ''}">
             ${isEmpty ? '(empty)' : escapeHtml(aiValue)}
           </div>
           <div class="field-actions">
-            ${!isEmpty
-              ? `<button class="btn-icon field-accept-btn" data-field="${field}" data-value="${escapeAttr(aiValue)}" title="Accept AI value">&#8594;</button>`
-              : `<button class="btn-icon field-accept-btn field-confirm-empty-btn" data-field="${field}" title="Confirm empty">&#8594;</button>`
+            ${hasUnconfirmed
+              ? `<button class="btn-icon field-confirm-unconfirmed-btn" data-field="${field}" title="Confirm this change">&#10003;</button>`
+              : !isEmpty
+                ? `<button class="btn-icon field-accept-btn" data-field="${field}" data-value="${escapeAttr(aiValue)}" title="Accept AI value">&#8594;</button>`
+                : `<button class="btn-icon field-accept-btn field-confirm-empty-btn" data-field="${field}" title="Confirm empty">&#8594;</button>`
             }
           </div>
           <div class="field-reviewed">
-            ${isLongField
-              ? `<textarea class="field-input ${isResolved ? 'resolved' : ''}" data-field="${field}" rows="3">${escapeHtml(reviewedValue)}</textarea>`
-              : `<input type="text" class="field-input ${isResolved ? 'resolved' : ''}" data-field="${field}" value="${escapeAttr(reviewedValue)}">`
-            }
+            <div class="field-input ${isResolved && !hasUnconfirmed ? 'resolved' : ''} ${hasUnconfirmed ? 'unconfirmed-input' : ''}" contenteditable="true" data-field="${field}">${escapeHtml(reviewedValue)}</div>
           </div>
         </div>
       `;
@@ -938,25 +939,98 @@ function renderCategoryForm() {
     });
   });
 
+  // Mark as uncertain buttons
+  el.querySelectorAll('.field-uncertain-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const field = btn.dataset.field;
+      const spec = APP.specimens[APP.currentIndex];
+      const specState = APP.state.specimens[spec.filename];
+      if (!specState) return;
+
+      // Get current value: from accepted, or from the contenteditable input, or from original JSON
+      const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
+      const currentValue = specState.accepted_fields?.[field]?.value
+        ?? (inputEl ? inputEl.textContent.replace(/\n/g, ' ').trim() : null)
+        ?? (APP.currentSpecimen.formatted_json?.[field] !== undefined ? String(APP.currentSpecimen.formatted_json[field]) : '');
+
+      // Move to unconfirmed (keep the value, just change the state)
+      if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
+      specState.unconfirmed_fields[field] = currentValue;
+
+      // Remove from accepted if it was there
+      if (specState.accepted_fields[field]) delete specState.accepted_fields[field];
+
+      // Un-confirm categories
+      autoConfirmCategories(spec.filename);
+      scheduleSaveState();
+      scheduleAutoSaveReviewed(spec.filename);
+
+      // Re-render
+      renderCategoryForm();
+      renderCategoryTabs();
+      renderCategoryFooter();
+      renderBounceBar();
+    });
+  });
+
+  // Confirm unconfirmed change buttons
+  el.querySelectorAll('.field-confirm-unconfirmed-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const field = btn.dataset.field;
+      const spec = APP.specimens[APP.currentIndex];
+
+      // Read the latest value from the contenteditable div (user may have edited further)
+      const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
+      const latestValue = inputEl
+        ? inputEl.textContent.replace(/\n/g, ' ').trim()
+        : APP.state.specimens[spec.filename]?.unconfirmed_fields?.[field] || '';
+
+      // Clear unconfirmed state, then accept with appropriate source
+      if (APP.state.specimens[spec.filename]?.unconfirmed_fields) {
+        delete APP.state.specimens[spec.filename].unconfirmed_fields[field];
+      }
+      const fj = APP.currentSpecimen.formatted_json || {};
+      const aiValue = fj[field] !== undefined ? String(fj[field]) : '';
+      let source;
+      if (latestValue === aiValue && aiValue !== '') source = 'ai';
+      else if (latestValue === '' && aiValue === '') source = 'confirmed_empty';
+      else if (aiValue === '' && latestValue !== '') source = 'user_added';
+      else source = 'edited';
+      acceptField(field, latestValue, source);
+      renderCategoryForm();
+    });
+  });
+
   el.querySelectorAll('.field-input').forEach(input => {
     input.addEventListener('input', () => {
       const field = input.dataset.field;
-      const value = input.value;
-      const fj = APP.currentSpecimen.formatted_json || {};
-      const aiValue = fj[field] !== undefined ? String(fj[field]) : '';
+      const value = input.textContent.replace(/\n/g, ' ').trim();
+      const spec = APP.specimens[APP.currentIndex];
+      const specState = APP.state.specimens[spec.filename];
+      const hasUnconfirmed = specState?.unconfirmed_fields?.[field] !== undefined;
 
-      let source;
-      if (value === '' && aiValue === '') source = 'confirmed_empty';
-      else if (value === aiValue) source = 'ai';
-      else if (aiValue === '' && value !== '') source = 'user_added';
-      else source = 'edited';
+      if (hasUnconfirmed) {
+        // Field is in unconfirmed state — keep updating unconfirmed, don't accept yet
+        specState.unconfirmed_fields[field] = value;
+        scheduleSaveState();
+      } else {
+        // Normal flow — accept the field
+        const fj = APP.currentSpecimen.formatted_json || {};
+        const aiValue = fj[field] !== undefined ? String(fj[field]) : '';
 
-      acceptField(field, value, source, false);
+        let source;
+        if (value === '' && aiValue === '') source = 'confirmed_empty';
+        else if (value === aiValue) source = 'ai';
+        else if (aiValue === '' && value !== '') source = 'user_added';
+        else source = 'edited';
+
+        acceptField(field, value, source, false);
+      }
     });
 
-    // Tab key moves to next field
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && input.tagName !== 'TEXTAREA') {
+      if (e.key === 'Enter') {
         e.preventDefault();
         const allInputs = [...el.querySelectorAll('.field-input')];
         const idx = allInputs.indexOf(input);
@@ -964,6 +1038,39 @@ function renderCategoryForm() {
       }
     });
   });
+
+  // Align all field labels to the widest one
+  alignFieldLabels(el);
+}
+
+function alignFieldLabels(container) {
+  const labels = container.querySelectorAll('.field-label');
+  if (labels.length === 0) return;
+
+  // Reset widths first so we can measure natural width
+  labels.forEach(l => { l.style.minWidth = ''; l.style.width = ''; });
+
+  // Find the widest label
+  let maxWidth = 0;
+  labels.forEach(l => {
+    maxWidth = Math.max(maxWidth, l.scrollWidth);
+  });
+
+  // Set all labels to that width
+  const widthPx = (maxWidth + 4) + 'px';
+  labels.forEach(l => {
+    l.style.minWidth = widthPx;
+    l.style.width = widthPx;
+  });
+
+  // Also update the grid column for compact view
+  if (document.body.classList.contains('compact-view')) {
+    container.querySelectorAll('.field-row').forEach(row => {
+      row.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
+    });
+    const headers = container.querySelector('.field-row-headers');
+    if (headers) headers.style.gridTemplateColumns = `${widthPx} 1fr auto 1fr auto`;
+  }
 }
 
 function getStatusLabel(source) {
@@ -988,7 +1095,7 @@ function acceptField(field, value, source, updateInput = true) {
   const input = document.querySelector(`.field-input[data-field="${field}"]`);
   if (input) {
     if (updateInput) {
-      input.value = value;
+      input.textContent = value;
     }
     input.classList.add('resolved');
   }
@@ -1763,17 +1870,24 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
 
     const fieldValues = {};
     const fieldAccepted = {};
+    const fieldUnconfirmed = {};
     for (const f of allFields) {
-      if (specState?.accepted_fields?.[f] !== undefined) {
+      if (specState?.unconfirmed_fields?.[f] !== undefined) {
+        fieldValues[f] = specState.unconfirmed_fields[f];
+        fieldAccepted[f] = false;
+        fieldUnconfirmed[f] = true;
+      } else if (specState?.accepted_fields?.[f] !== undefined) {
         fieldValues[f] = specState.accepted_fields[f].value;
         fieldAccepted[f] = true;
+        fieldUnconfirmed[f] = false;
       } else {
         fieldValues[f] = originalFj[f] !== undefined ? String(originalFj[f]) : '';
         fieldAccepted[f] = false;
+        fieldUnconfirmed[f] = false;
       }
     }
 
-    rows.push({ index: i, filename: spec.filename, status, fieldValues, fieldAccepted });
+    rows.push({ index: i, filename: spec.filename, status, fieldValues, fieldAccepted, fieldUnconfirmed });
   }
 
   // Filter
@@ -1803,8 +1917,10 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
       <td><span class="status-badge ${r.status}">${r.status.replace('-', ' ')}</span></td>
       ${allFields.map(f => {
         const accepted = r.fieldAccepted[f];
+        const unconfirmed = r.fieldUnconfirmed[f];
         const val = r.fieldValues[f];
-        return `<td class="${accepted ? 'cell-accepted' : 'cell-unaccepted'}" data-field="${escapeAttr(f)}" data-index="${r.index}" title="${escapeAttr(val)}">${escapeHtml(val)}</td>`;
+        const cls = unconfirmed ? 'cell-limbo' : (accepted ? 'cell-accepted' : 'cell-unaccepted');
+        return `<td class="${cls}" data-field="${escapeAttr(f)}" data-index="${r.index}" title="${escapeAttr(val)}"${unconfirmed ? ` data-limbo-value="${escapeAttr(val)}"` : ''}>${escapeHtml(val)}</td>`;
       }).join('')}
     </tr>
   `).join('');
@@ -1819,12 +1935,20 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
     });
   });
 
-  // Click on data cell to inline-edit
+  // Single click: expand cell and start editing immediately
   tbody.querySelectorAll('td[data-field]').forEach(td => {
     td.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(td.dataset.index);
       if (idx !== tableSelectedIndex) selectTableRow(idx);
+
+      // Collapse other expanded cells
+      tbody.querySelectorAll('td.expanded').forEach(other => {
+        if (other !== td) other.classList.remove('expanded');
+      });
+      td.classList.add('expanded');
+
+      // Start editing immediately
       startCellEdit(td, idx, td.dataset.field, allFields);
     });
   });
@@ -1855,11 +1979,14 @@ function toggleTableLock() {
     overlay.innerHTML = `
       <div style="background:var(--bg-secondary);border:1px solid var(--warning);border-radius:var(--radius);padding:24px;max-width:480px;cursor:default" onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--warning)">&#9888; Enable Table Editing</div>
-        <div style="font-size:13px;margin-bottom:8px;color:var(--text-secondary);line-height:1.6">
-          When you enable <strong>Table Editing</strong>, clicking on a cell indicates that you have <strong>CONFIRMED</strong> the content to be accurate even if you have not made any edits to the text!
+        <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.8">
+          <div style="margin-bottom:4px"><strong>Click</strong> a cell to open it for editing.</div>
+          <div style="margin-bottom:4px"><strong>Enter</strong> confirms the value into the reviewed record.</div>
+          <div style="margin-bottom:4px"><strong>Tab</strong> or <strong>clicking away</strong> without Enter leaves the cell as an <strong style="color:var(--warning)">Unconfirmed Change</strong> (orange outline).</div>
+          <div style="margin-bottom:4px"><strong>Escape</strong> discards changes and reverts to the original value.</div>
         </div>
-        <div style="font-size:13px;margin-bottom:16px;color:var(--text-secondary);line-height:1.6">
-          Please be careful and lock the table when edits are not desired.
+        <div style="font-size:12px;margin-bottom:16px;color:var(--text-muted);line-height:1.6">
+          Lock the table when you are done editing to prevent accidental changes.
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button class="btn-sm" id="lock-cancel">Cancel</button>
@@ -1899,7 +2026,11 @@ function updateTableLockButton() {
 
 function startCellEdit(td, specimenIndex, fieldName, allFields) {
   if (tableEditingLocked) return;
-  if (td.querySelector('.cell-edit-input')) return;
+  if (td.querySelector('.cell-edit-input')) {
+    // Already editing — just focus
+    td.querySelector('.cell-edit-input').focus();
+    return;
+  }
 
   const spec = APP.specimens[specimenIndex];
   const cached = tableDataCache[spec.filename];
@@ -1912,14 +2043,25 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
   const originalText = td.textContent;
   const wasAccepted = td.classList.contains('cell-accepted');
 
-  td.innerHTML = `<input type="text" class="cell-edit-input" value="${escapeAttr(currentValue)}">`;
+  td.innerHTML = `<div class="cell-edit-input" contenteditable="true">${escapeHtml(currentValue)}</div>`;
   const input = td.querySelector('.cell-edit-input');
   input.focus();
-  input.select();
+  // Place cursor at end
+  const range = document.createRange();
+  const sel = window.getSelection();
+  if (input.childNodes.length > 0) {
+    range.setStartAfter(input.lastChild);
+  } else {
+    range.setStart(input, 0);
+  }
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
 
   const commit = () => {
-    const newValue = input.value;
+    const newValue = input.textContent.replace(/\n/g, ' ').trim();
     td.textContent = newValue;
+    td.classList.remove('cell-limbo', 'expanded');
 
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
 
@@ -1933,6 +2075,11 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
     APP.state.specimens[spec.filename].accepted_fields[fieldName] = { value: newValue, source };
     APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
 
+    // Clear unconfirmed state
+    if (APP.state.specimens[spec.filename].unconfirmed_fields) {
+      delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
+    }
+
     td.classList.remove('cell-unaccepted');
     td.classList.add('cell-accepted');
     td.title = newValue;
@@ -1941,37 +2088,92 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
     scheduleAutoSaveReviewed(spec.filename);
   };
 
+  const goLimbo = () => {
+    const newValue = input.textContent.replace(/\n/g, ' ').trim();
+    td.textContent = newValue;
+    td.classList.add('cell-limbo');
+    td.classList.remove('expanded');
+    td.title = newValue;
+    td.dataset.limboValue = newValue;
+
+    // Persist unconfirmed change to state
+    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+    if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
+      APP.state.specimens[spec.filename].unconfirmed_fields = {};
+    }
+    APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
+    scheduleSaveState();
+  };
+
   const cancel = () => {
     td.textContent = originalText;
     td.classList.toggle('cell-accepted', wasAccepted);
     td.classList.toggle('cell-unaccepted', !wasAccepted);
+    td.classList.remove('cell-limbo', 'expanded');
+    delete td.dataset.limboValue;
+
+    // Clear unconfirmed state
+    if (APP.state.specimens[spec.filename]?.unconfirmed_fields) {
+      delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
+      scheduleSaveState();
+    }
   };
 
-  input.addEventListener('blur', commit);
+  input.addEventListener('blur', () => {
+    // Only go to limbo if the value was actually changed
+    if (input.textContent.replace(/\n/g, ' ').trim() !== currentValue) {
+      goLimbo();
+    } else {
+      // No change — just collapse back to normal
+      td.textContent = originalText;
+      td.classList.toggle('cell-accepted', wasAccepted);
+      td.classList.toggle('cell-unaccepted', !wasAccepted);
+      td.classList.remove('expanded');
+    }
+  });
+
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      input.removeEventListener('blur', commit);
+      e.preventDefault(); // Prevent newline in contenteditable
+      input.removeEventListener('blur', goLimbo);
       commit();
       const nextTd = document.querySelector(`.batch-table td[data-field="${fieldName}"][data-index="${specimenIndex + 1}"]`);
       if (nextTd) {
         selectTableRow(specimenIndex + 1);
+        nextTd.classList.add('expanded');
         startCellEdit(nextTd, specimenIndex + 1, fieldName, allFields);
       }
     } else if (e.key === 'Escape') {
-      input.removeEventListener('blur', commit);
+      input.removeEventListener('blur', goLimbo);
       cancel();
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      input.removeEventListener('blur', commit);
-      commit();
+      // Tab = move to next cell without confirming (same as clicking away)
+      input.blur();
       const fieldIdx = allFields.indexOf(fieldName);
       const nextField = allFields[e.shiftKey ? fieldIdx - 1 : fieldIdx + 1];
       if (nextField) {
         const nextTd = document.querySelector(`.batch-table td[data-field="${nextField}"][data-index="${specimenIndex}"]`);
-        if (nextTd) startCellEdit(nextTd, specimenIndex, nextField, allFields);
+        if (nextTd) {
+          nextTd.classList.add('expanded');
+          startCellEdit(nextTd, specimenIndex, nextField, allFields);
+        }
       }
     }
   });
+
+  // If re-entering a limbo cell, restore the limbo value
+  if (td.dataset.limboValue !== undefined) {
+    input.textContent = td.dataset.limboValue;
+    // Place cursor at end
+    const r2 = document.createRange();
+    const s2 = window.getSelection();
+    if (input.childNodes.length > 0) { r2.setStartAfter(input.lastChild); }
+    else { r2.setStart(input, 0); }
+    r2.collapse(true);
+    s2.removeAllRanges();
+    s2.addRange(r2);
+  }
 }
 
 // ── Focus View ──────────────────────────────────────────────
@@ -2821,11 +3023,11 @@ function applyThemeColors() {
   const selectedG = Math.min(255, Math.round(brightest * 1.1) + 10);
   root.style.setProperty('--row-selected', grayToHex(selectedG));
   const cc = APP.settings.catColors || {};
-  root.style.setProperty('--cat-0', cc.cat0 || '#7fbfff');
-  root.style.setProperty('--cat-1', cc.cat1 || '#f6a14f');
+  root.style.setProperty('--cat-0', cc.cat0 || '#479EF5');
+  root.style.setProperty('--cat-1', cc.cat1 || '#CA50F7');
   root.style.setProperty('--cat-2', cc.cat2 || '#48ca48');
-  root.style.setProperty('--cat-3', cc.cat3 || '#a855a8');
-  root.style.setProperty('--cat-4', cc.cat4 || '#ff7f7f');
+  root.style.setProperty('--cat-3', cc.cat3 || '#A0A220');
+  root.style.setProperty('--cat-4', cc.cat4 || '#FF5C5C');
   root.style.setProperty('--cat-5', cc.cat5 || '#7fffff');
   root.style.setProperty('--cat-6', cc.cat6 || '#ffff7f');
   root.style.setProperty('--cat-misc', cc.catMisc || '#888888');
@@ -2856,12 +3058,12 @@ function openSettingsPopup() {
 
       <div class="settings-row">
         <div class="settings-label">
-          <div>Compact View</div>
-          <div class="settings-desc">Move field names and status badges inline with the text inputs to save vertical space</div>
+          <div>Expanded View</div>
+          <div class="settings-desc">Show field names and status badges on a separate line above the text inputs (default is compact/inline)</div>
         </div>
-        <div class="table-lock-toggle ${APP.settings.compactView ? 'unlocked' : 'locked'}" id="setting-compact-view">
+        <div class="table-lock-toggle ${APP.settings.expandedView ? 'unlocked' : 'locked'}" id="setting-expanded-view">
           <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span class="table-lock-label" style="text-transform:none">${APP.settings.compactView ? 'Enabled' : 'Disabled'}</span>
+          <span class="table-lock-label" style="text-transform:none">${APP.settings.expandedView ? 'Enabled' : 'Disabled'}</span>
         </div>
       </div>
 
@@ -2892,11 +3094,11 @@ function openSettingsPopup() {
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
           ${[
-            ['cat0', 'Geography', '#7fbfff'],
-            ['cat1', 'Taxonomy', '#f6a14f'],
+            ['cat0', 'Geography', '#479EF5'],
+            ['cat1', 'Taxonomy', '#CA50F7'],
             ['cat2', 'Collecting', '#48ca48'],
-            ['cat3', 'Locality', '#a855a8'],
-            ['cat4', 'Cat 5', '#ff7f7f'],
+            ['cat3', 'Locality', '#A0A220'],
+            ['cat4', 'Cat 5', '#FF5C5C'],
             ['cat5', 'Cat 6', '#7fffff'],
             ['cat6', 'Cat 7', '#ffff7f'],
             ['catMisc', 'Misc', '#888888'],
@@ -2936,13 +3138,13 @@ function openSettingsPopup() {
   });
 
   // Compact view toggle
-  document.getElementById('setting-compact-view').addEventListener('click', () => {
-    APP.settings.compactView = !APP.settings.compactView;
-    const toggle = document.getElementById('setting-compact-view');
-    toggle.classList.toggle('locked', !APP.settings.compactView);
-    toggle.classList.toggle('unlocked', APP.settings.compactView);
-    toggle.querySelector('.table-lock-label').textContent = APP.settings.compactView ? 'Enabled' : 'Disabled';
-    document.body.classList.toggle('compact-view', APP.settings.compactView);
+  document.getElementById('setting-expanded-view').addEventListener('click', () => {
+    APP.settings.expandedView = !APP.settings.expandedView;
+    const toggle = document.getElementById('setting-expanded-view');
+    toggle.classList.toggle('locked', !APP.settings.expandedView);
+    toggle.classList.toggle('unlocked', APP.settings.expandedView);
+    toggle.querySelector('.table-lock-label').textContent = APP.settings.expandedView ? 'Enabled' : 'Disabled';
+    document.body.classList.toggle('compact-view', !APP.settings.expandedView);
   });
 
   // Row gray sliders
@@ -2975,7 +3177,7 @@ function openSettingsPopup() {
     });
   });
 
-  const catDefaults = { cat0: '#7fbfff', cat1: '#f6a14f', cat2: '#48ca48', cat3: '#a855a8', cat4: '#ff7f7f', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' };
+  const catDefaults = { cat0: '#479EF5', cat1: '#CA50F7', cat2: '#48CA48', cat3: '#A0A220', cat4: '#FF5C5C', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' };
   document.getElementById('setting-cat-reset').addEventListener('click', () => {
     APP.settings.catColors = { ...catDefaults };
     document.querySelectorAll('.setting-cat-color').forEach(input => {
@@ -3087,7 +3289,6 @@ function acceptAllFields() {
 // ── Utility ─────────────────────────────────────────────────
 
 function createSlideSwitch(id, options, activeValue, onChange) {
-  const activeIdx = options.findIndex(o => o.value === activeValue);
   const html = `
     <div class="slide-switch" id="${id}">
       <div class="slide-switch-thumb" id="${id}-thumb"></div>

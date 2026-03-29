@@ -19,11 +19,11 @@
   --border-focus: #2ecc71;
 
   /* Category colors */
-  --cat-0: #7fbfff;
-  --cat-1: #f6a14f;
-  --cat-2: #48ca48;
-  --cat-3: #a855a8;
-  --cat-4: #ff7f7f;
+  --cat-0: #479EF5;
+  --cat-1: #CA50F7;
+  --cat-2: #48CA48;
+  --cat-3: #A0A220;
+  --cat-4: #FF5C5C;
   --cat-5: #7fffff;
   --cat-6: #ffff7f;
   --cat-misc: #888;
@@ -186,6 +186,34 @@ input[type="text"], input[type="number"], textarea {
 }
 
 input:focus, textarea:focus { border-color: var(--border-focus); }
+
+div.field-input[contenteditable] {
+  min-height: 28px;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  outline: none;
+  font-family: var(--font);
+  font-size: 13px;
+  transition: border-color var(--transition);
+  width: 100%;
+}
+
+div.field-input[contenteditable]:focus {
+  border-color: var(--border-focus);
+}
+
+div.field-input[contenteditable]:empty::before {
+  content: '';
+  display: block;
+  min-height: 1em;
+}
 
 textarea { resize: vertical; min-height: 60px; }
 
@@ -551,6 +579,49 @@ textarea { resize: vertical; min-height: 60px; }
 .field-reviewed input.resolved, .field-reviewed textarea.resolved {
   background: rgba(45, 122, 45, 0.15);
   border-color: var(--accent);
+}
+
+/* Unconfirmed change in form view */
+.field-reviewed input.unconfirmed-input,
+.field-reviewed textarea.unconfirmed-input {
+  border: 2px solid var(--warning);
+  background: rgba(246, 161, 79, 0.1);
+}
+
+.field-status.unconfirmed {
+  background: var(--warning);
+  color: #000;
+  font-weight: 600;
+}
+
+.field-uncertain-btn {
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  border-color: transparent !important;
+  font-size: 15px;
+  padding: 0 4px;
+  opacity: 0.6;
+  transition: all var(--transition);
+  line-height: 1;
+}
+
+.field-uncertain-btn:hover {
+  opacity: 1;
+  color: var(--warning) !important;
+  transform: rotate(-45deg);
+}
+
+.field-confirm-unconfirmed-btn {
+  background: var(--warning) !important;
+  color: #000 !important;
+  border-color: var(--warning) !important;
+  font-size: 14px;
+  padding: 4px 10px;
+  line-height: 1;
+}
+
+.field-confirm-unconfirmed-btn:hover {
+  background: #e8952e !important;
 }
 
 .field-actions {
@@ -1063,11 +1134,30 @@ textarea { resize: vertical; min-height: 60px; }
 .batch-table td {
   padding: 4px 10px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
-  max-width: 180px;
+  max-width: 300px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  cursor: default;
+}
+
+/* Collapsed cell: single line with ellipsis */
+.batch-table td[data-field] {
   white-space: nowrap;
-  cursor: text;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* Expanded cell: wrap at ~60 chars */
+.batch-table td[data-field].expanded {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 420px;
+  overflow: visible;
+  background: var(--row-selected, var(--bg-hover));
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+  position: relative;
 }
 
 .batch-table tr { transition: background var(--transition); }
@@ -1092,7 +1182,17 @@ textarea { resize: vertical; min-height: 60px; }
   color: var(--text-primary);
 }
 
-/* Inline edit input */
+/* Limbo state: edited but not confirmed */
+.batch-table td.cell-limbo {
+  outline: 2px solid var(--warning);
+  outline-offset: -2px;
+  color: var(--warning);
+  font-style: italic;
+  position: relative;
+  z-index: 1;
+}
+
+/* Inline edit (contenteditable div) */
 .batch-table td .cell-edit-input {
   width: 100%;
   padding: 2px 4px;
@@ -1102,6 +1202,13 @@ textarea { resize: vertical; min-height: 60px; }
   color: var(--text-primary);
   border-radius: 2px;
   outline: none;
+  font-family: var(--font);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  min-height: 1.4em;
+  line-height: 1.4;
+  cursor: text;
 }
 
 /* Table image sidebar */
@@ -1640,10 +1747,12 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── Compact View ──────────────────────────────────────── */
 
-.compact-view .field-row-headers { display: none; }
+.compact-view .field-row-headers {
+  grid-template-columns: auto 1fr auto 1fr auto;
+}
 
 .compact-view .field-row {
-  grid-template-columns: 100px 1fr auto 1fr auto;
+  grid-template-columns: auto 1fr auto 1fr auto;
   grid-template-rows: 1fr;
   align-items: center;
   padding: 4px 8px;
@@ -1655,9 +1764,9 @@ textarea { resize: vertical; min-height: 60px; }
   grid-row: 1;
   margin-bottom: 0;
   font-size: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: right;
+  justify-content: flex-end;
 }
 
 .compact-view .field-label .field-status {
