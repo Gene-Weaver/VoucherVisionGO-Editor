@@ -21,7 +21,7 @@ const APP = {
   elevationCollapsed: false,
   username: '',
   settings: {
-    acceptAllEnabled: false, mapTheme: 'dark',
+    acceptAllEnabled: false, compactView: false, mapTheme: 'dark',
     rowColorOdd: '#2f2f2f', rowColorEven: '#242424',
     catColors: { cat0: '#7fbfff', cat1: '#f6a14f', cat2: '#48ca48', cat3: '#a855a8', cat4: '#ff7f7f', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' },
   },
@@ -199,6 +199,7 @@ async function loadFolder(folderPath) {
   APP.settings = await window.api.loadSettings(folderPath);
   APP.mapTheme = APP.settings.mapTheme || 'dark';
   applyThemeColors();
+  if (APP.settings.compactView) document.body.classList.add('compact-view');
 
   // Load persisted state
   APP.state = await window.api.loadState(folderPath);
@@ -896,7 +897,7 @@ function renderCategoryForm() {
       const isLongField = aiValue.length > 80 || ['habitat', 'specimenDescription', 'locality', 'additionalText', 'identificationHistory'].includes(field);
 
       return `
-        <div class="field-row ${isResolved ? 'resolved' : ''}" data-field="${field}">
+        <div class="field-row ${isResolved ? 'resolved' : ''}" data-field="${field}" data-source="${source}" data-status="${getStatusLabel(source)}">
           <div class="field-label" style="color: ${isResolved ? 'var(--text-muted)' : cat.color}">
             ${escapeHtml(field)}
             <span class="field-status ${source}">${getStatusLabel(source)}</span>
@@ -996,6 +997,8 @@ function acceptField(field, value, source, updateInput = true) {
   const row = document.querySelector(`.field-row[data-field="${field}"]`);
   if (row) {
     row.classList.add('resolved');
+    row.dataset.source = source;
+    row.dataset.status = getStatusLabel(source);
     const statusEl = row.querySelector('.field-status');
     if (statusEl) {
       statusEl.className = `field-status ${source}`;
@@ -1255,42 +1258,97 @@ function showExportWarningDialog(incomplete) {
 }
 
 function showFinalExportWarning(incomplete) {
+  // Count total unreviewed fields
+  let totalUnreviewed = 0;
+  for (const item of incomplete) {
+    const spec = APP.specimens[item.index - 1];
+    const specState = APP.state.specimens[spec.filename];
+    const cached = tableDataCache[spec.filename];
+    const totalFields = Object.keys(cached?.formatted_json || {}).length;
+    const resolvedFields = specState ? Object.keys(specState.accepted_fields || {}).length : 0;
+    totalUnreviewed += (totalFields - resolvedFields);
+  }
+
   const overlay = document.createElement('div');
   overlay.className = 'image-modal-overlay';
   overlay.style.cursor = 'default';
 
   overlay.innerHTML = `
-    <div style="background:var(--bg-secondary);border:1px solid var(--error);border-radius:var(--radius);padding:24px;max-width:450px;cursor:default" onclick="event.stopPropagation()">
-      <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--error)">Final Warning</div>
-      <div style="font-size:13px;margin-bottom:16px;color:var(--text-secondary);line-height:1.6">
-        All ${incomplete.length} incomplete specimens will be marked as complete and assumed to be fully reviewed.
-        Their current accepted values will be used as-is. Unreviewed fields will remain empty in the export.
+    <div style="background:var(--bg-secondary);border:1px solid var(--error);border-radius:var(--radius);padding:24px;max-width:520px;cursor:default" onclick="event.stopPropagation()">
+      <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--error)">Export Incomplete Records</div>
+      <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
+        ${incomplete.length} specimens have a total of <strong>${totalUnreviewed}</strong> unreviewed fields.
+        How should unreviewed fields be handled in the export?
       </div>
+
+      <div style="margin-bottom:16px;display:flex;flex-direction:column;gap:10px">
+        <div style="padding:12px;border:2px solid var(--accent);border-radius:var(--radius);background:rgba(46,204,113,0.08);cursor:pointer" id="option-blank">
+          <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">Leave unreviewed fields blank (Recommended)</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.4">
+            Unreviewed fields will be exported as empty strings. This preserves the zero-trust workflow — only values you have explicitly confirmed will appear in the output.
+          </div>
+        </div>
+
+        <div style="padding:12px;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer" id="option-populate">
+          <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:4px">Populate with VoucherVision suggestions</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.4">
+            Unreviewed fields will be filled with VoucherVision's original values. These values have <strong>not</strong> been verified by a human reviewer. Use with caution.
+          </div>
+        </div>
+      </div>
+
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn-sm" id="final-cancel">Cancel</button>
-        <button class="btn-sm" style="background:var(--error);color:#fff;border-color:var(--error)" id="final-confirm">Yes, Export All</button>
       </div>
     </div>
   `;
 
   document.body.appendChild(overlay);
   overlay.addEventListener('click', () => overlay.remove());
-
   document.getElementById('final-cancel').addEventListener('click', () => overlay.remove());
-  document.getElementById('final-confirm').addEventListener('click', async () => {
+
+  // Option 1: Leave blank (recommended)
+  document.getElementById('option-blank').addEventListener('click', async () => {
     overlay.remove();
 
-    // Mark all incomplete as complete
+    // Mark all incomplete as complete but leave unreviewed fields as ""
     for (const item of incomplete) {
       const spec = APP.specimens[item.index - 1];
       if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
       const specState = APP.state.specimens[spec.filename];
 
-      // Confirm all categories
       const categories = getCategoriesForSpecimen(spec.filename);
       specState.categories_confirmed = categories.map(c => c.name);
 
-      // Auto-accept any unresolved fields with AI values
+      // Accept unreviewed fields as confirmed_empty
+      const cached = tableDataCache[spec.filename] || await window.api.readSpecimen(APP.folderPath, spec.filename);
+      const originalFj = cached?.formatted_json || {};
+      for (const field of Object.keys(originalFj)) {
+        if (!specState.accepted_fields[field]) {
+          specState.accepted_fields[field] = { value: '', source: 'confirmed_empty' };
+        }
+      }
+
+      await autoSaveReviewed(spec.filename);
+    }
+
+    scheduleSaveState();
+    await doExport();
+  });
+
+  // Option 2: Populate with VV suggestions
+  document.getElementById('option-populate').addEventListener('click', async () => {
+    overlay.remove();
+
+    for (const item of incomplete) {
+      const spec = APP.specimens[item.index - 1];
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      const specState = APP.state.specimens[spec.filename];
+
+      const categories = getCategoriesForSpecimen(spec.filename);
+      specState.categories_confirmed = categories.map(c => c.name);
+
+      // Auto-accept unreviewed fields with VoucherVision values
       const cached = tableDataCache[spec.filename] || await window.api.readSpecimen(APP.folderPath, spec.filename);
       const originalFj = cached?.formatted_json || {};
       for (const [field, val] of Object.entries(originalFj)) {
@@ -1303,7 +1361,6 @@ function showFinalExportWarning(incomplete) {
         }
       }
 
-      // Write reviewed file
       await autoSaveReviewed(spec.filename);
     }
 
@@ -1313,16 +1370,32 @@ function showFinalExportWarning(incomplete) {
 }
 
 async function doExport() {
-  // Build rows for XLSX
+  // Get all possible field keys from first specimen
+  let allFieldKeys = [];
+  if (APP.specimens.length > 0) {
+    const firstData = tableDataCache[APP.specimens[0].filename]
+      || await window.api.readSpecimen(APP.folderPath, APP.specimens[0].filename);
+    if (firstData) allFieldKeys = Object.keys(firstData.formatted_json || {});
+  }
+
+  // Build rows for XLSX — zero-trust: unreviewed fields stay ""
   const rows = [];
   for (const spec of APP.specimens) {
     const specState = APP.state.specimens[spec.filename];
-    if (!specState) continue;
-
     const row = { filename: spec.filename };
-    for (const [field, info] of Object.entries(specState.accepted_fields)) {
-      row[field] = info.value;
+
+    // Start all fields as empty
+    for (const key of allFieldKeys) {
+      row[key] = '';
     }
+
+    // Fill in only accepted values
+    if (specState?.accepted_fields) {
+      for (const [field, info] of Object.entries(specState.accepted_fields)) {
+        row[field] = info.value;
+      }
+    }
+
     rows.push(row);
   }
 
@@ -1458,6 +1531,84 @@ function initResizeHandleV(handleId, panelId, containerId, minRatio, maxRatio) {
   });
 }
 
+function initColumnResize(container) {
+  const table = container.querySelector('.batch-table');
+  if (!table) return;
+
+  const ths = table.querySelectorAll('th');
+
+  // Capture auto-calculated widths so dragging has a starting point
+  ths.forEach(th => {
+    th.style.width = th.offsetWidth + 'px';
+    th.style.minWidth = th.offsetWidth + 'px';
+  });
+
+  ths.forEach(th => {
+    const handle = document.createElement('div');
+    handle.className = 'th-resize-handle';
+    th.appendChild(handle);
+
+    handle.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const colIndex = Array.from(ths).indexOf(th);
+      const rows = table.querySelectorAll('tbody tr');
+      let maxWidth = th.scrollWidth;
+
+      // Measure widest cell in this column
+      rows.forEach(row => {
+        const cell = row.children[colIndex];
+        if (cell) {
+          // Temporarily remove constraints to measure natural width
+          const oldW = cell.style.width;
+          const oldMin = cell.style.minWidth;
+          const oldMax = cell.style.maxWidth;
+          cell.style.width = 'auto';
+          cell.style.minWidth = 'auto';
+          cell.style.maxWidth = 'none';
+          cell.style.whiteSpace = 'nowrap';
+          maxWidth = Math.max(maxWidth, cell.scrollWidth + 20);
+          cell.style.width = oldW;
+          cell.style.minWidth = oldMin;
+          cell.style.maxWidth = oldMax;
+          cell.style.whiteSpace = '';
+        }
+      });
+
+      th.style.width = maxWidth + 'px';
+      th.style.minWidth = maxWidth + 'px';
+    });
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startWidth = th.offsetWidth;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const onMove = (ev) => {
+        const diff = ev.clientX - startX;
+        const newWidth = Math.max(40, startWidth + diff);
+        th.style.width = newWidth + 'px';
+        th.style.minWidth = newWidth + 'px';
+      };
+
+      const onUp = () => {
+        handle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
 // ── Batch Table View ────────────────────────────────────────
 
 const tableDataCache = {};
@@ -1568,6 +1719,9 @@ async function renderTableView() {
       renderTableBody(allFields, document.getElementById('table-filter').value.toLowerCase(), sortCol, sortAsc);
     });
   });
+
+  // Column resize handles
+  initColumnResize(el);
 
   // Resizable: left panel min 50%, max 75% (image gets 25-50%)
   initResizeHandle('table-resize-handle', 'table-left-panel', 'table-resizable', 0.50, 0.75);
@@ -2700,6 +2854,17 @@ function openSettingsPopup() {
         </div>
       </div>
 
+      <div class="settings-row">
+        <div class="settings-label">
+          <div>Compact View</div>
+          <div class="settings-desc">Move field names and status badges inline with the text inputs to save vertical space</div>
+        </div>
+        <div class="table-lock-toggle ${APP.settings.compactView ? 'unlocked' : 'locked'}" id="setting-compact-view">
+          <div class="toggle-track"><div class="toggle-thumb"></div></div>
+          <span class="table-lock-label" style="text-transform:none">${APP.settings.compactView ? 'Enabled' : 'Disabled'}</span>
+        </div>
+      </div>
+
       <div class="settings-row" style="flex-direction:column;align-items:stretch">
         <div class="settings-label" style="margin-bottom:8px">
           <div>Row Colors (Gray)</div>
@@ -2745,7 +2910,9 @@ function openSettingsPopup() {
         </div>
       </div>
 
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)">
+        <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:11px">Reset Project</button>
+        <div style="flex:1"></div>
         <button class="btn-sm btn-primary" id="settings-close">Done</button>
       </div>
     </div>
@@ -2766,6 +2933,16 @@ function openSettingsPopup() {
     toggle.classList.toggle('locked', !APP.settings.acceptAllEnabled);
     toggle.classList.toggle('unlocked', APP.settings.acceptAllEnabled);
     toggle.querySelector('.table-lock-label').textContent = APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled';
+  });
+
+  // Compact view toggle
+  document.getElementById('setting-compact-view').addEventListener('click', () => {
+    APP.settings.compactView = !APP.settings.compactView;
+    const toggle = document.getElementById('setting-compact-view');
+    toggle.classList.toggle('locked', !APP.settings.compactView);
+    toggle.classList.toggle('unlocked', APP.settings.compactView);
+    toggle.querySelector('.table-lock-label').textContent = APP.settings.compactView ? 'Enabled' : 'Disabled';
+    document.body.classList.toggle('compact-view', APP.settings.compactView);
   });
 
   // Row gray sliders
@@ -2806,6 +2983,70 @@ function openSettingsPopup() {
     });
     applyThemeColors();
   });
+
+  // Reset Project
+  document.getElementById('settings-reset-project').addEventListener('click', () => {
+    showResetProjectDialog();
+  });
+}
+
+function showResetProjectDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+
+  overlay.innerHTML = `
+    <div style="background:var(--bg-secondary);border:2px solid var(--error);border-radius:var(--radius);padding:24px;max-width:480px;cursor:default" onclick="event.stopPropagation()">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;color:var(--error)">&#9888; Danger: Reset Project</div>
+      <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
+        Resetting this project will <strong>permanently delete</strong> all review progress:
+      </div>
+      <div style="padding:10px;background:var(--bg-primary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);line-height:1.8">
+        <div style="color:var(--error)">All *__REVIEWED.json files</div>
+        <div style="color:var(--error)">All .xlsx spreadsheets</div>
+        <div>_vvgo_editor_state.json</div>
+        <div>_vvgo_editor_settings.json</div>
+        <div>_prompts/</div>
+      </div>
+      <div style="font-size:12px;margin-bottom:16px;color:var(--text-muted)">
+        Your original JSON files will <strong>not</strong> be deleted. This cannot be undone.
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn-sm" id="reset-cancel">Cancel</button>
+        <button class="btn-sm" id="reset-confirm" style="background:var(--error);color:#fff;border-color:var(--error);font-weight:700">Delete All &amp; Reset</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', () => overlay.remove());
+  document.getElementById('reset-cancel').addEventListener('click', () => overlay.remove());
+  document.getElementById('reset-confirm').addEventListener('click', async () => {
+    overlay.remove();
+    // Close settings popup too
+    document.querySelectorAll('.image-modal-overlay').forEach(o => o.remove());
+    await performProjectReset();
+  });
+}
+
+async function performProjectReset() {
+  if (!APP.folderPath) return;
+
+  await window.api.resetProject(APP.folderPath);
+
+  // Reset in-memory state
+  APP.state = { version: 1, folder_path: APP.folderPath, last_modified: new Date().toISOString(), current_specimen: '', specimens: {} };
+  APP.settings = { acceptAllEnabled: false, mapTheme: 'dark', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {} };
+  APP.currentIndex = 0;
+
+  // Re-scan folder and reload
+  APP.specimens = await window.api.scanFolder(APP.folderPath);
+  if (APP.specimens.length > 0) {
+    await loadSpecimen(0);
+  }
+  applyThemeColors();
+  updateNavBar();
+  alert('Project has been reset. All review progress has been deleted.');
 }
 
 async function saveCurrentSettings() {

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   readSpecimenRaw: (folderPath, filename) => ipcRenderer.invoke('read-specimen-raw', folderPath, filename),
   selectSavePath: (defaultName) => ipcRenderer.invoke('select-save-path', defaultName),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('write-file', filePath, data, encoding),
+  resetProject: (folderPath) => ipcRenderer.invoke('reset-project', folderPath),
   exportXlsx: (filePath, rows) => ipcRenderer.invoke('export-xlsx', filePath, rows),
   loadSettings: (folderPath) => ipcRenderer.invoke('load-settings', folderPath),
   saveSettings: (folderPath, settings) => ipcRenderer.invoke('save-settings', folderPath, settings)

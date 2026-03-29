@@ -1038,8 +1038,27 @@ textarea { resize: vertical; min-height: 60px; }
   z-index: 1;
 }
 
+.batch-table th {
+  position: relative;
+}
+
 .batch-table th:hover { color: var(--text-primary); }
 .batch-table th .sort-indicator { font-size: 10px; margin-left: 4px; }
+
+.th-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.th-resize-handle:hover,
+.th-resize-handle.dragging {
+  background: var(--accent);
+}
 
 .batch-table td {
   padding: 4px 10px;
@@ -1617,6 +1636,99 @@ textarea { resize: vertical; min-height: 60px; }
   font-size: 12px;
   color: var(--text-muted);
   text-align: center;
+}
+
+/* ── Compact View ──────────────────────────────────────── */
+
+.compact-view .field-row-headers { display: none; }
+
+.compact-view .field-row {
+  grid-template-columns: 100px 1fr auto 1fr auto;
+  grid-template-rows: 1fr;
+  align-items: center;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.compact-view .field-label {
+  grid-column: 1;
+  grid-row: 1;
+  margin-bottom: 0;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-view .field-label .field-status {
+  display: none;
+}
+
+.compact-view .field-ai-value {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 11px;
+  min-height: unset;
+  padding: 4px 8px;
+}
+
+.compact-view .field-actions {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.compact-view .field-reviewed {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.compact-view .field-reviewed input,
+.compact-view .field-reviewed textarea {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Compact flair — shown inline at end */
+.compact-view .field-row::after {
+  grid-column: 5;
+  grid-row: 1;
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+  text-align: center;
+  min-width: 50px;
+}
+
+.compact-view .field-row.resolved::after {
+  content: attr(data-status);
+}
+
+.compact-view .field-row:not(.resolved)::after {
+  content: 'pending';
+  background: #000;
+  color: #e0e0e0;
+}
+
+.compact-view .field-row[data-source="ai"]::after {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.compact-view .field-row[data-source="edited"]::after {
+  background: #2d5a7a;
+  color: var(--accent);
+}
+
+.compact-view .field-row[data-source="user_added"]::after {
+  background: var(--accent);
+  color: #1a1a1a;
+}
+
+.compact-view .field-row[data-source="confirmed_empty"]::after {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
 }
 
 /* ── Image Modal ───────────────────────────────────────── */

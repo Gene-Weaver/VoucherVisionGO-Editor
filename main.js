@@ -122,6 +122,35 @@ ipcMain.handle('save-settings', async (_, folderPath, settings) => {
   return settingsManager.saveSettings(folderPath, settings);
 });
 
+ipcMain.handle('reset-project', async (_, folderPath) => {
+  const fs = require('fs');
+  const path = require('path');
+
+  // Delete all __REVIEWED.json files and .xlsx spreadsheets
+  const entries = fs.readdirSync(folderPath);
+  for (const entry of entries) {
+    if (entry.endsWith('__REVIEWED.json') || entry.endsWith('.xlsx')) {
+      fs.unlinkSync(path.join(folderPath, entry));
+    }
+  }
+
+  // Delete state file
+  const stateFile = path.join(folderPath, '_vvgo_editor_state.json');
+  if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile);
+
+  // Delete settings file
+  const settingsFile = path.join(folderPath, '_vvgo_editor_settings.json');
+  if (fs.existsSync(settingsFile)) fs.unlinkSync(settingsFile);
+
+  // Delete _prompts directory
+  const promptsDir = path.join(folderPath, '_prompts');
+  if (fs.existsSync(promptsDir)) {
+    fs.rmSync(promptsDir, { recursive: true, force: true });
+  }
+
+  return true;
+});
+
 ipcMain.handle('export-xlsx', async (_, filePath, rows) => {
   const XLSX = require('xlsx');
   const wb = XLSX.utils.book_new();
