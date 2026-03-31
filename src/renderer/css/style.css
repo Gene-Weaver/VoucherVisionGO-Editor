@@ -821,6 +821,14 @@ textarea { resize: vertical; min-height: 60px; }
   z-index: 0;
 }
 
+/* Blue-themed slide switch */
+.slide-switch-blue .slide-switch-thumb {
+  background: var(--cat-0);
+}
+.slide-switch-blue .slide-switch-option.active {
+  color: #fff;
+}
+
 /* ── Button Group (3+ options) ─────────────────────────── */
 
 .btn-group {
@@ -1691,6 +1699,10 @@ textarea { resize: vertical; min-height: 60px; }
   white-space: nowrap;
 }
 
+.focus-field-name.tool-active-field {
+  color: var(--cat-0);
+}
+
 .focus-field-badge {
   font-size: 9px;
   padding: 1px 5px;
@@ -1787,6 +1799,192 @@ textarea { resize: vertical; min-height: 60px; }
 
 .focus-v-resize:hover, .focus-v-resize.dragging {
   background: var(--accent);
+}
+
+/* Tool category bar */
+.focus-tool-category-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.focus-tools-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.focus-tool-sections {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.focus-tool-field-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+  min-height: 0;
+}
+
+.focus-tool-field-bar:empty {
+  display: none;
+}
+
+/* ── Standardization Tools ────────────────────────────────── */
+.std-tool {
+  border-bottom: 1px solid var(--border);
+}
+
+.std-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+}
+
+.std-tool-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.std-tool-fields {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.std-tool-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.std-tool-count.has-changes {
+  color: var(--warning);
+}
+
+.std-tool-preview {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.std-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 2px 24px;
+  font-size: 11px;
+}
+
+.std-preview-row:nth-child(odd) { background: var(--row-odd, var(--bg-secondary)); }
+.std-preview-row:nth-child(even) { background: var(--row-even, var(--bg-tertiary)); }
+
+.std-old-val {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  text-decoration: line-through;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.std-new-val {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Focus two-column layout — left (nav+tools) / right (image+carousel) */
+.focus-columns {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.focus-left-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.focus-right-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.focus-right-col .table-image-container {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 0;
+}
+
+.focus-right-col .table-image-container img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+
+/* ── Elevation Discrepancy Status ─────────────────────────── */
+.elev-status {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 100px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.elev-ok {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--success);
+}
+
+.elev-warn {
+  background: #3a3020;
+  color: var(--warning);
+}
+
+.elev-warn-high {
+  background: #3a2020;
+  color: #ff8c5c;
+}
+
+.elev-error {
+  background: #3a2020;
+  color: var(--error);
+}
+
+.focus-elev-calc {
+  flex-shrink: 0;
+  max-height: 10vh;
 }
 
 /* Fixed section headers (non-collapsible) */
@@ -2161,6 +2359,23 @@ textarea { resize: vertical; min-height: 60px; }
   font-style: italic;
 }
 
+.focus-flag {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+  opacity: 0.4;
+}
+.focus-flag:hover {
+  opacity: 1;
+  color: var(--error);
+}
+.focus-flag.flagged {
+  opacity: 1;
+  color: var(--error);
+}
+
 .focus-goto {
   cursor: pointer;
   font-size: 12px;
@@ -2179,6 +2394,46 @@ textarea { resize: vertical; min-height: 60px; }
   border-radius: 1px;
   flex-shrink: 0;
   border: 1px solid rgba(255,255,255,0.08);
+}
+
+.focus-specimen-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.focus-spec-hdr-status {
+  /* spans #, flag, goto, flair — approximate total width */
+  min-width: 88px;
+  text-align: center;
+}
+
+.focus-spec-hdr-filename {
+  flex: 0 0 auto;
+  width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.focus-spec-hdr-field {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 
 .focus-specimen-row {
@@ -2216,7 +2471,8 @@ textarea { resize: vertical; min-height: 60px; }
 .focus-specimen-row .spec-value {
   font-family: var(--font-mono);
   font-size: 11px;
-  max-width: 200px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   mapTheme: 'dark',
   rowColorOdd: '#2f2f2f',
   rowColorEven: '#242424',
+  imageCacheSize: 500,
   catColors: {
     cat0: '#479EF5',
     cat1: '#CA50F7',

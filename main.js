@@ -24,6 +24,7 @@ function createWindow() {
     }
   });
 
+  mainWindow.maximize();
   mainWindow.loadFile(path.join(__dirname, 'src', 'renderer', 'index.html'));
 
   // Open dev tools in development
@@ -115,10 +116,16 @@ ipcMain.handle('write-file', async (_, filePath, data, encoding) => {
 });
 
 ipcMain.handle('load-settings', async (_, folderPath) => {
-  return settingsManager.loadSettings(folderPath);
+  const settings = settingsManager.loadSettings(folderPath);
+  if (settings.imageCacheSize) imageDecoder.setMaxCacheSize(settings.imageCacheSize);
+  return settings;
 });
 
 ipcMain.handle('save-settings', async (_, folderPath, settings) => {
+  // Update image cache size if changed
+  if (settings.imageCacheSize !== undefined) {
+    imageDecoder.setMaxCacheSize(settings.imageCacheSize);
+  }
   return settingsManager.saveSettings(folderPath, settings);
 });
 

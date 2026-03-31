@@ -96,6 +96,7 @@ function parsePromptYaml(rawYaml, promptName) {
   return {
     promptName,
     mapping: doc.mapping || {},
+    editor_tools: doc.editor_tools || {},
     rules: doc.rules || {},
     metadata: {
       prompt_author: doc.prompt_author || '',

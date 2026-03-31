@@ -189,6 +189,7 @@ async function loadFolder(folderPath) {
 
   // Scan for JSON files
   APP.specimens = await window.api.scanFolder(folderPath);
+  rebuildSpecimenIndexMap();
 
   if (APP.specimens.length === 0) {
     alert('No VoucherVisionGO JSON files found in this folder.');
@@ -855,10 +856,11 @@ async function findNextUnresolved() {
     }
 
     const fj = specimenData.formatted_json || {};
-    const totalFields = Object.keys(fj).length;
+    const allFieldKeys = Object.keys(fj);
     const resolvedFields = specState ? Object.keys(specState.accepted_fields || {}).length : 0;
+    const hasUnconfirmed = specState?.unconfirmed_fields && Object.keys(specState.unconfirmed_fields).length > 0;
 
-    if (resolvedFields >= totalFields) continue; // Fully resolved
+    if (resolvedFields >= allFieldKeys.length && !hasUnconfirmed) continue; // Fully resolved, no unconfirmed
 
     // Find which category has pending fields
     // Use prompt mapping if available, otherwise put all in MISC
@@ -881,7 +883,7 @@ async function findNextUnresolved() {
       fieldsInSpecimen.forEach(f => assignedFields.add(f));
 
       const pending = fieldsInSpecimen.filter(f =>
-        !specState?.accepted_fields?.[f]
+        specState?.unconfirmed_fields?.[f] !== undefined || !specState?.accepted_fields?.[f]
       );
 
       if (pending.length > 0) {
@@ -891,7 +893,9 @@ async function findNextUnresolved() {
 
     // Check MISC fields
     const miscFields = allFields.filter(f => !assignedFields.has(f));
-    const miscPending = miscFields.filter(f => !specState?.accepted_fields?.[f]);
+    const miscPending = miscFields.filter(f =>
+      specState?.unconfirmed_fields?.[f] !== undefined || !specState?.accepted_fields?.[f]
+    );
     if (miscPending.length > 0) {
       return { specimenIndex: idx, categoryName: 'MISC', firstPendingField: miscPending[0] };
     }
@@ -1755,8 +1759,10 @@ function initFocusVerticalResizeHandles(container) {
     const onMove = (e) => {
       if (!dragging) return;
       const delta = e.clientY - startY;
-      const newAboveH = Math.max(32, startAboveH + delta);
-      const newBelowH = Math.max(32, startBelowH - delta);
+      const total = startAboveH + startBelowH;
+      const maxAbove = above.classList.contains('focus-top-row') ? total * 0.9 : total - 32;
+      const newAboveH = Math.min(maxAbove, Math.max(32, startAboveH + delta));
+      const newBelowH = Math.max(32, total - newAboveH);
       above.style.flex = 'none';
       above.style.height = newAboveH + 'px';
       below.style.flex = 'none';
@@ -1857,6 +1863,11 @@ function initColumnResize(container) {
 // ── Batch Table View ────────────────────────────────────────
 
 const tableDataCache = {};
+const specimenIndexMap = new Map(); // filename → index, rebuilt when specimens change
+function rebuildSpecimenIndexMap() {
+  specimenIndexMap.clear();
+  APP.specimens.forEach((s, i) => specimenIndexMap.set(s.filename, i));
+}
 let tableSelectedIndex = 0;
 let tableImageType = 'collage';
 let tableEditingLocked = true;
@@ -1866,12 +1877,13 @@ async function renderTableView() {
   const el = document.getElementById('table-view');
   if (!el) return;
 
-  // Load all specimen data
-  for (const spec of APP.specimens) {
-    if (!tableDataCache[spec.filename]) {
-      try { tableDataCache[spec.filename] = await window.api.readSpecimen(APP.folderPath, spec.filename); }
-      catch { tableDataCache[spec.filename] = null; }
-    }
+  // Load all specimen data (parallel)
+  const tableUncached = APP.specimens.filter(s => !tableDataCache[s.filename]);
+  if (tableUncached.length > 0) {
+    const tableResults = await Promise.all(tableUncached.map(s =>
+      window.api.readSpecimen(APP.folderPath, s.filename).catch(() => null)
+    ));
+    tableUncached.forEach((s, i) => { tableDataCache[s.filename] = tableResults[i]; });
   }
 
   // Get all fields from first specimen
@@ -1949,9 +1961,11 @@ async function renderTableView() {
 
   renderTableBody(allFields, '');
 
-  // Filter
+  // Filter (debounced)
+  let filterTimeout;
   document.getElementById('table-filter').addEventListener('input', (e) => {
-    renderTableBody(allFields, e.target.value.toLowerCase());
+    clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(() => renderTableBody(allFields, e.target.value.toLowerCase()), 150);
   });
 
   // Sort
@@ -1991,10 +2005,12 @@ async function loadTableImage(index) {
   }
 }
 
-function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
-  const tbody = document.getElementById('table-body');
-  if (!tbody) return;
+// Cache prepared table rows to avoid recomputing on scroll
+let _tableRowsCache = null;
+let _tableFilteredCache = null;
 
+function prepareTableRows(allFields) {
+  if (_tableRowsCache) return _tableRowsCache;
   const rows = [];
   for (let i = 0; i < APP.specimens.length; i++) {
     const spec = APP.specimens[i];
@@ -2028,6 +2044,16 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
 
     rows.push({ index: i, filename: spec.filename, status, fieldValues, fieldAccepted, fieldUnconfirmed });
   }
+  _tableRowsCache = rows;
+  return rows;
+}
+
+function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
+  const tbody = document.getElementById('table-body');
+  if (!tbody) return;
+
+  _tableRowsCache = null; // always recompute on explicit render
+  const rows = prepareTableRows(allFields);
 
   // Filter
   const filtered = filter
@@ -2048,7 +2074,50 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
     return 0;
   });
 
-  tbody.innerHTML = filtered.map(r => `
+  _tableFilteredCache = filtered;
+
+  // Virtual scroll: only render visible rows + buffer
+  const wrapper = tbody.closest('.batch-table-wrapper');
+  const ROW_HEIGHT = 28;
+  const totalHeight = filtered.length * ROW_HEIGHT;
+
+  // Store allFields for scroll handler
+  tbody._vsAllFields = allFields;
+
+  // Set up virtual scroll listener once
+  if (!tbody._virtualScrollInit && wrapper) {
+    tbody._virtualScrollInit = true;
+    let scrollRAF = null;
+    wrapper.addEventListener('scroll', () => {
+      if (scrollRAF) return;
+      scrollRAF = requestAnimationFrame(() => {
+        scrollRAF = null;
+        renderVisibleTableRows(tbody._vsAllFields, wrapper, null, ROW_HEIGHT);
+      });
+    });
+  }
+
+  renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT);
+}
+
+function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
+  if (!filtered) filtered = _tableFilteredCache || [];
+  const tbody = document.getElementById('table-body');
+  if (!tbody || !wrapper) return;
+
+  const scrollTop = wrapper.scrollTop;
+  const viewHeight = wrapper.clientHeight;
+  const buffer = 10;
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - buffer);
+  const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + buffer);
+
+  const topPad = startIdx * ROW_HEIGHT;
+  const bottomPad = (filtered.length - endIdx) * ROW_HEIGHT;
+  const visible = filtered.slice(startIdx, endIdx);
+
+  tbody.innerHTML = `
+    <tr style="height:${topPad}px"><td colspan="999"></td></tr>
+    ${visible.map(r => `
     <tr class="status-${r.status} ${r.index === tableSelectedIndex ? 'selected' : ''}" data-index="${r.index}">
       <td class="cell-goto" data-index="${r.index}" title="Open in form view" style="cursor:pointer;text-align:center;font-size:12px">&#9998;</td>
       <td>${r.index + 1}</td>
@@ -2064,7 +2133,9 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
         return `<td class="${cls}" data-field="${escapeAttr(f)}" data-index="${r.index}" title="${isEmpty ? '(empty)' : escapeAttr(val)}"${unconfirmed ? ` data-limbo-value="${escapeAttr(val)}"` : ''}>${displayVal}</td>`;
       }).join('')}
     </tr>
-  `).join('');
+  `).join('')}
+    <tr style="height:${bottomPad}px"><td colspan="999"></td></tr>
+  `;
 
   // Click eye icon to go to form view
   tbody.querySelectorAll('.cell-goto').forEach(td => {
@@ -2326,12 +2397,13 @@ async function renderFocusView() {
   const el = document.getElementById('focus-view');
   if (!el) return;
 
-  // Ensure all specimen data is loaded
-  for (const spec of APP.specimens) {
-    if (!tableDataCache[spec.filename]) {
-      try { tableDataCache[spec.filename] = await window.api.readSpecimen(APP.folderPath, spec.filename); }
-      catch { tableDataCache[spec.filename] = null; }
-    }
+  // Ensure all specimen data is loaded (parallel)
+  const uncached = APP.specimens.filter(s => !tableDataCache[s.filename]);
+  if (uncached.length > 0) {
+    const results = await Promise.all(uncached.map(s =>
+      window.api.readSpecimen(APP.folderPath, s.filename).catch(() => null)
+    ));
+    uncached.forEach((s, i) => { tableDataCache[s.filename] = results[i]; });
   }
 
   // Get categories and fields
@@ -2341,20 +2413,23 @@ async function renderFocusView() {
   }
 
   el.innerHTML = `
-    <div class="review-nav">
-      <div class="nav-view-toggle" id="focus-view-switch-container"></div>
-      <span style="font-size:13px;font-weight:600;color:var(--text-primary)">Focus Mode</span>
-      <span class="text-muted" style="font-size:11px">${APP.specimens.length} specimens</span>
-      <span style="flex:1"></span>
-      <button class="btn-sm btn-primary focus-confirm-btn" id="focus-confirm-modified" disabled>Confirm modified <span style="display:inline-block;width:8px;height:8px;background:var(--warning);border-radius:1px;vertical-align:middle;margin:0 2px"></span> entries for <span id="focus-confirm-field-label">—</span></button>
-      <button class="btn-sm focus-confirm-btn" id="focus-confirm-all" disabled>Confirm ALL entries for <span id="focus-confirm-all-field-label">—</span></button>
-      <span style="flex:1"></span>
-    </div>
-    <div class="focus-body">
-      <div class="focus-sidebar" id="focus-sidebar"></div>
-      <div class="focus-main" id="focus-main"></div>
-      <div class="resize-handle" id="focus-resize-handle"></div>
-      <div class="table-image-panel" id="focus-image-panel">
+    <div class="focus-columns" id="focus-columns">
+      <div class="focus-left-col" id="focus-left-col">
+        <div class="review-nav">
+          <div class="nav-view-toggle" id="focus-view-switch-container"></div>
+          <span style="font-size:13px;font-weight:600;color:var(--text-primary)">Focus Mode</span>
+          <span class="text-muted" style="font-size:11px">${APP.specimens.length} specimens</span>
+          <span style="flex:1"></span>
+          <button class="btn-sm btn-primary focus-confirm-btn" id="focus-confirm-modified" disabled>Confirm modified <span style="display:inline-block;width:8px;height:8px;background:var(--warning);border-radius:1px;vertical-align:middle;margin:0 2px"></span> entries for <span id="focus-confirm-field-label">—</span></button>
+          <button class="btn-sm focus-confirm-btn" id="focus-confirm-all" disabled>Confirm ALL entries for <span id="focus-confirm-all-field-label">—</span></button>
+        </div>
+        <div class="focus-body" id="focus-body">
+          <div class="focus-sidebar" id="focus-sidebar"></div>
+          <div class="focus-main" id="focus-main"></div>
+        </div>
+      </div>
+      <div class="resize-handle" id="focus-col-resize"></div>
+      <div class="focus-right-col" id="focus-image-panel">
         <div class="image-viewer-header">
           <span>Image</span>
           <div id="focus-image-switch-container"></div>
@@ -2402,8 +2477,13 @@ async function renderFocusView() {
   renderFocusSidebar(categories);
   renderFocusMain();
 
-  // Resizable image panel
-  initResizeHandle('focus-resize-handle', 'focus-main', 'focus-view', 0.50, 0.75);
+  // Resizable split between left and right columns (left: 50%-80%, right: 20%-50%)
+  initResizeHandle('focus-col-resize', 'focus-left-col', 'focus-columns', 0.50, 0.80);
+
+  // Load first specimen image on startup
+  if (APP.specimens.length > 0) {
+    loadFocusImage(0);
+  }
 }
 
 function getCategoryColorForField(field) {
@@ -2600,14 +2680,34 @@ function updateFocusConfirmButtons() {
   allBtn.disabled = (limboCount + unresolvedCount) === 0;
 }
 
-function countFieldIssues(field) {
-  let count = 0;
+// Batch-compute issue counts for all fields in one pass
+let _fieldIssueCounts = null;
+let _fieldIssueCountsVersion = 0;
+let _fieldIssueCountsLastVersion = -1;
+
+function invalidateFieldIssueCounts() { _fieldIssueCountsVersion++; }
+
+function getFieldIssueCounts() {
+  if (_fieldIssueCountsLastVersion === _fieldIssueCountsVersion && _fieldIssueCounts) return _fieldIssueCounts;
+  _fieldIssueCounts = {};
   for (const spec of APP.specimens) {
     const st = APP.state.specimens[spec.filename];
-    if (st?.unconfirmed_fields?.[field] !== undefined) count++;       // limbo
-    else if (!st?.accepted_fields?.[field]) count++;                  // pending
+    if (!st) continue;
+    // Check all fields from first specimen's formatted_json
+    const cached = tableDataCache[spec.filename];
+    const fields = cached ? Object.keys(cached.formatted_json || {}) : [];
+    for (const field of fields) {
+      if (!_fieldIssueCounts[field]) _fieldIssueCounts[field] = 0;
+      if (st.unconfirmed_fields?.[field] !== undefined) _fieldIssueCounts[field]++;
+      else if (!st.accepted_fields?.[field]) _fieldIssueCounts[field]++;
+    }
   }
-  return count;
+  _fieldIssueCountsLastVersion = _fieldIssueCountsVersion;
+  return _fieldIssueCounts;
+}
+
+function countFieldIssues(field) {
+  return getFieldIssueCounts()[field] || 0;
 }
 
 function getAllValuesForField(field) {
@@ -2633,7 +2733,7 @@ function getAllValuesForField(field) {
       value = fj[field] !== undefined ? String(fj[field]) : '';
       cellState = 'unaccepted';
     }
-    result.push({ filename: spec.filename, value, index: APP.specimens.indexOf(spec), cellState });
+    result.push({ filename: spec.filename, value, index: specimenIndexMap.get(spec.filename), cellState });
   }
   return result;
 }
@@ -2723,14 +2823,614 @@ function fingerprintCluster(fieldValues) {
 // ── Focus Main Panel ────────────────────────────────────────
 
 // Track which sections are minimized
-const focusSectionState = { values: false, clusters: true, dates: true, catalog: true, specimens: false };
+const focusSectionState = { values: false, clusters: false, dates: false, catalog: false, specimens: false, standardize: false, authorship: false, elevation: false };
 let focusToolScope = 'field'; // 'field' or 'everything'
+let focusToolCategory = null; // dynamic from editor_tools, null = no tools shown
+
+// Get available tool categories from prompt's editor_tools mapping
+function getEditorToolCategories() {
+  const et = APP.currentPrompt?.editor_tools || {};
+  return Object.keys(et).map(k => k.toLowerCase());
+}
+
+// Get fields for a tool category from editor_tools
+function getEditorToolFields(category) {
+  const et = APP.currentPrompt?.editor_tools || {};
+  for (const [k, v] of Object.entries(et)) {
+    if (k.toLowerCase() === category.toLowerCase()) return v || [];
+  }
+  return [];
+}
+
+// Section-to-category mapping — built dynamically
+function getFocusToolCategories() {
+  const cats = getEditorToolCategories();
+  const result = {};
+  // clusters section → cluster category
+  if (cats.includes('cluster')) result.clusters = ['cluster'];
+  // dates section → dates category
+  if (cats.includes('dates')) result.dates = ['dates'];
+  // catalog/patterns section → patterns category
+  if (cats.includes('patterns')) result.catalog = ['patterns'];
+  // standardize section → all categories that have standardization tools
+  const stdCats = ['taxonomy', 'geography', 'collectors', 'coordinates'];
+  result.standardize = stdCats.filter(c => cats.includes(c));
+  // authorship → taxonomy
+  if (cats.includes('taxonomy')) result.authorship = ['taxonomy'];
+  // elevation → elevation
+  if (cats.includes('elevation')) result.elevation = ['elevation'];
+  return result;
+}
+
+// ── US State Abbreviation Lookup ────────────────────────────
+const US_STATE_ABBREVS = {
+  'AL':'Alabama','AK':'Alaska','AZ':'Arizona','AR':'Arkansas','CA':'California',
+  'CO':'Colorado','CT':'Connecticut','DE':'Delaware','FL':'Florida','GA':'Georgia',
+  'HI':'Hawaii','ID':'Idaho','IL':'Illinois','IN':'Indiana','IA':'Iowa',
+  'KS':'Kansas','KY':'Kentucky','LA':'Louisiana','ME':'Maine','MD':'Maryland',
+  'MA':'Massachusetts','MI':'Michigan','MN':'Minnesota','MS':'Mississippi','MO':'Missouri',
+  'MT':'Montana','NE':'Nebraska','NV':'Nevada','NH':'New Hampshire','NJ':'New Jersey',
+  'NM':'New Mexico','NY':'New York','NC':'North Carolina','ND':'North Dakota','OH':'Ohio',
+  'OK':'Oklahoma','OR':'Oregon','PA':'Pennsylvania','RI':'Rhode Island','SC':'South Carolina',
+  'SD':'South Dakota','TN':'Tennessee','TX':'Texas','UT':'Utah','VT':'Vermont',
+  'VA':'Virginia','WA':'Washington','WV':'West Virginia','WI':'Wisconsin','WY':'Wyoming',
+  'DC':'District of Columbia','PR':'Puerto Rico','VI':'Virgin Islands','GU':'Guam',
+  'AS':'American Samoa','MP':'Northern Mariana Islands'
+};
+
+const USA_VARIANTS = ['USA','U.S.A.','U.S.A','US','U.S.','U.S','United States of America','The United States of America','The United States'];
+
+// ── Standardization Tool Registry ───────────────────────────
+// Each tool: { id, label, categories[], transform(value, field, spec) → newValue|null }
+// Tools apply to ALL fields. The transform receives the field name and returns null to skip.
+const STANDARDIZE_TOOLS = [
+  {
+    id: 'genus-title-case',
+    label: 'Genus → Title Case',
+    categories: ['taxonomy'],
+    transform: (v, field) => {
+      if (!/genus/i.test(field) || /specific|epithet/i.test(field)) return null;
+      return v ? v.charAt(0).toUpperCase() + v.slice(1).toLowerCase() : null;
+    }
+  },
+  {
+    id: 'epithet-lowercase',
+    label: 'Specific Epithet → lowercase',
+    categories: ['taxonomy'],
+    transform: (v, field) => {
+      if (!/epithet/i.test(field)) return null;
+      return (v && v !== v.toLowerCase()) ? v.toLowerCase() : null;
+    }
+  },
+  {
+    id: 'taxon-rank-normalize',
+    label: 'Normalize taxonRank (ssp.→subsp.)',
+    categories: ['taxonomy'],
+    transform: (v) => {
+      if (!v) return null;
+      const fixed = v.replace(/\bssp\.?\b/gi, 'subsp.')
+                     .replace(/\bsubspp?\.?\b/gi, 'subsp.')
+                     .replace(/\bvar\.?\b/gi, 'var.')
+                     .replace(/\bforma?\b/gi, 'f.');
+      return fixed !== v ? fixed : null;
+    }
+  },
+  {
+    id: 'geo-title-case',
+    label: 'Geography fields → Title Case (ALL-CAPS only)',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/country|state|province|county|continent/i.test(field)) return null;
+      if (!v || !/^[^a-z]*$/.test(v) || v.length < 2) return null;
+      return v.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    }
+  },
+  {
+    id: 'usa-standardize',
+    label: 'Standardize "USA" variants → "United States"',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/country/i.test(field)) return null;
+      if (!v) return null;
+      const upper = v.trim().toUpperCase().replace(/\./g, '');
+      if (USA_VARIANTS.some(u => u.toUpperCase().replace(/\./g, '') === upper)) return 'United States';
+      return null;
+    }
+  },
+  {
+    id: 'state-abbrev-expand',
+    label: 'US state abbreviations → full names',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/state|province/i.test(field)) return null;
+      if (!v) return null;
+      const trimmed = v.trim().toUpperCase();
+      return US_STATE_ABBREVS[trimmed] || null;
+    }
+  },
+  {
+    id: 'county-suffix-strip',
+    label: 'Strip "County" / "Co." suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/county/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Co(?:unty|\.?)?\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
+    id: 'collector-title-case',
+    label: 'Collectors → Title Case (ALL-CAPS only)',
+    categories: ['collectors'],
+    transform: (v, field) => {
+      if (!/collect|associat/i.test(field)) return null;
+      if (!v || /[a-z]/.test(v)) return null;
+      return v.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    }
+  },
+  {
+    id: 'datum-normalize',
+    label: 'Standardize datum → "WGS84"',
+    categories: ['coordinates'],
+    transform: (v, field) => {
+      if (!/datum/i.test(field)) return null;
+      if (!v) return null;
+      if (/^WGS\s*84$/i.test(v) && v !== 'WGS84') return 'WGS84';
+      return null;
+    }
+  },
+  {
+    id: 'cultivated-normalize',
+    label: 'Standardize cultivated (empty or "1")',
+    categories: ['taxonomy'],
+    transform: (v, field) => {
+      if (!/cultivat/i.test(field)) return null;
+      if (v === '' || v === '1') return null;
+      if (!v || v.trim() === '') return '';
+      return '1';
+    }
+  }
+];
+
+// ── Standardization Preview + Apply Engine ──────────────────
+
+function getStandardizePreview(tool) {
+  const results = [];
+  // Use editor_tools fields for the active category, fall back to all fields
+  const etFields = getEditorToolFields(focusToolCategory);
+  const first = APP.specimens[0] ? tableDataCache[APP.specimens[0].filename] : null;
+  const allFields = etFields.length > 0 ? etFields : (first ? Object.keys(first.formatted_json || {}) : []);
+
+  for (const spec of APP.specimens) {
+    for (const field of allFields) {
+      const currentVal = getCurrentFieldValue(spec, field);
+      if (currentVal === '') continue;
+      const newVal = tool.transform(currentVal, field, spec);
+      if (newVal !== null && newVal !== currentVal) {
+        const idx = specimenIndexMap.get(spec.filename);
+        results.push({ filename: spec.filename, index: idx, field, oldVal: currentVal, newVal });
+      }
+    }
+  }
+  return results;
+}
+
+function applyStandardizeTool(tool) {
+  const preview = getStandardizePreview(tool);
+  if (preview.length === 0) return 0;
+  for (const item of preview) {
+    const spec = APP.specimens[item.index];
+    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+    if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
+    APP.state.specimens[spec.filename].unconfirmed_fields[item.field] = item.newVal;
+    APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+  }
+  scheduleSaveState();
+  return preview.length;
+}
+
+function renderStandardizeSection() {
+  const container = document.getElementById('focus-standardize-list');
+  if (!container) return;
+
+  // Skip expensive preview computation if section isn't visible
+  const activeCat = focusToolCategory;
+  if (!activeCat) { container.innerHTML = ''; return; }
+  const tools = STANDARDIZE_TOOLS.filter(t => t.categories.includes(activeCat));
+
+  if (tools.length === 0) {
+    container.innerHTML = '<div class="focus-no-clusters">No standardization tools for this category</div>';
+    return;
+  }
+
+  container.innerHTML = tools.map(tool => {
+    const preview = getStandardizePreview(tool);
+    const count = preview.length;
+    return `
+      <div class="std-tool" data-tool-id="${tool.id}">
+        <div class="std-tool-header">
+          <span class="std-tool-label">${escapeHtml(tool.label)}</span>
+          <span class="std-tool-fields">${[...new Set(preview.map(p => p.field))].map(f => escapeHtml(f)).join(', ')}</span>
+          <span class="std-tool-count ${count > 0 ? 'has-changes' : ''}">${count > 0 ? count + ' affected' : 'no changes'}</span>
+          <button class="btn-sm btn-primary std-tool-apply" data-tool-id="${tool.id}" ${count === 0 ? 'disabled' : ''}>Apply</button>
+        </div>
+        ${count > 0 ? `
+          <div class="std-tool-preview">
+            ${preview.slice(0, 20).map(p => `
+              <div class="std-preview-row">
+                <span class="spec-filename" style="min-width:100px">${escapeHtml(p.filename.replace(/\.[^.]+$/, '').slice(0, 20))}</span>
+                <span style="font-size:10px;color:var(--text-muted)">${escapeHtml(p.field)}</span>
+                <span class="std-old-val">${escapeHtml(p.oldVal)}</span>
+                <span style="color:var(--text-muted)">→</span>
+                <span class="std-new-val">${escapeHtml(p.newVal)}</span>
+              </div>
+            `).join('')}
+            ${preview.length > 20 ? `<div style="padding:4px 12px;font-size:10px;color:var(--text-muted)">…and ${preview.length - 20} more</div>` : ''}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Wire apply buttons
+  container.querySelectorAll('.std-tool-apply').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const toolId = btn.dataset.toolId;
+      const tool = STANDARDIZE_TOOLS.find(t => t.id === toolId);
+      if (!tool) return;
+      const count = applyStandardizeTool(tool);
+      renderFocusMain();
+      renderFocusSidebar(getFocusCategories());
+      if (count > 0) alert(`Applied to ${count} value(s)`);
+    });
+  });
+}
+
+// ── Authorship Detection Tool ───────────────────────────────
+
+function detectAuthorship() {
+  const results = [];
+  for (const spec of APP.specimens) {
+    const idx = specimenIndexMap.get(spec.filename);
+    const sciName = getCurrentFieldValue(spec, 'scientificName');
+    if (!sciName || sciName.trim() === '') continue;
+
+    const parts = sciName.trim().split(/\s+/);
+    // genus + epithet = 2 parts; anything after is potential authorship/infrarank
+    if (parts.length <= 2) continue;
+
+    const genus = parts[0];
+    const epithet = parts[1];
+    const remainder = parts.slice(2).join(' ');
+
+    // Check if remainder looks like authorship or infrarank
+    // Infrarank markers: var., subsp., ssp., f., subvar.
+    const infrarankPattern = /^(var\.|subsp\.|ssp\.|f\.|subvar\.)\s+/i;
+    let cleanName, authorship;
+
+    if (infrarankPattern.test(remainder)) {
+      // Has infrarank — find authorship after infrarank epithet
+      // e.g. "var. lutetiana (Léman) Baker" → name="genus epithet var. lutetiana", auth="(Léman) Baker"
+      const infraMatch = remainder.match(/^((?:var\.|subsp\.|ssp\.|f\.|subvar\.)\s+\S+)\s+(.+)$/i);
+      if (infraMatch) {
+        cleanName = genus + ' ' + epithet + ' ' + infraMatch[1];
+        authorship = infraMatch[2];
+      } else {
+        // Just infrarank + epithet, no trailing authorship
+        continue;
+      }
+    } else {
+      // Everything after genus + epithet is authorship
+      cleanName = genus + ' ' + epithet;
+      authorship = remainder;
+    }
+
+    if (authorship) {
+      results.push({
+        filename: spec.filename,
+        index: idx,
+        original: sciName,
+        cleanName,
+        authorship,
+      });
+    }
+  }
+  return results;
+}
+
+function renderAuthorshipSection() {
+  const container = document.getElementById('focus-authorship-list');
+  if (!container) return;
+  if (focusToolCategory !== 'taxonomy') { container.innerHTML = ''; return; }
+
+  const detections = detectAuthorship();
+
+  if (detections.length === 0) {
+    container.innerHTML = '<div class="focus-no-clusters">No authorship strings detected in scientificName</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <div style="padding:6px 12px;font-size:11px;color:var(--text-secondary)">${detections.length} specimen(s) with potential authorship in scientificName</div>
+    ${detections.map(d => `
+      <div class="std-preview-row focus-clickable-row" data-index="${d.index}">
+        <span class="spec-filename" style="min-width:100px">${escapeHtml(d.filename.replace(/\.[^.]+$/, '').slice(0, 20))}</span>
+        <span class="std-old-val">${escapeHtml(d.original)}</span>
+        <span style="color:var(--text-muted)">→</span>
+        <span class="std-new-val">${escapeHtml(d.cleanName)}</span>
+        <span style="color:var(--text-muted)">+</span>
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--cat-1)">${escapeHtml(d.authorship)}</span>
+      </div>
+    `).join('')}
+    <div style="padding:8px 12px">
+      <button class="btn-sm btn-primary" id="authorship-apply-all" ${detections.length === 0 ? 'disabled' : ''}>Split All (${detections.length})</button>
+    </div>
+  `;
+
+  // Wire row clicks
+  container.querySelectorAll('.focus-clickable-row').forEach(row => {
+    row.addEventListener('click', () => loadFocusImage(parseInt(row.dataset.index)));
+  });
+
+  // Wire apply button
+  document.getElementById('authorship-apply-all')?.addEventListener('click', () => {
+    for (const d of detections) {
+      const spec = APP.specimens[d.index];
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      APP.state.specimens[spec.filename].unconfirmed_fields['scientificName'] = d.cleanName;
+      APP.state.specimens[spec.filename].unconfirmed_fields['scientificNameAuthorship'] = d.authorship;
+      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+    }
+    scheduleSaveState();
+    renderFocusMain();
+    renderFocusSidebar(getFocusCategories());
+    alert(`Split authorship for ${detections.length} specimen(s)`);
+  });
+}
+
+// ── Elevation Discrepancy Tool ───────────────────────────────
+
+function analyzeElevationDiscrepancy() {
+  const elevFields = getEditorToolFields('elevation');
+  if (elevFields.length === 0) return [];
+
+  const results = [];
+  for (const spec of APP.specimens) {
+    const cached = tableDataCache[spec.filename];
+    if (!cached) continue;
+    const cop90 = parseFloat(cached.COP90_elevation_m);
+    if (isNaN(cop90)) continue;
+
+    const idx = specimenIndexMap.get(spec.filename);
+
+    for (const field of elevFields) {
+      const val = getCurrentFieldValue(spec, field);
+      if (!val || val.trim() === '') continue;
+      const elev = parseFloat(val);
+      if (isNaN(elev)) continue;
+
+      const diff = Math.abs(elev - cop90);
+      let status, statusCls;
+      if (elev > 8800) {
+        status = 'Must be feet or error';
+        statusCls = 'elev-error';
+      } else if (diff > 1000) {
+        status = 'Check 1000+';
+        statusCls = 'elev-warn-high';
+      } else if (diff > 500) {
+        status = 'Check 500-1000';
+        statusCls = 'elev-warn';
+      } else {
+        status = 'Nominal <500';
+        statusCls = 'elev-ok';
+      }
+
+      results.push({ filename: spec.filename, index: idx, field, value: elev, cop90, diff: Math.round(diff), status, statusCls });
+    }
+  }
+  return results;
+}
+
+function initFocusElevCalc() {
+  const metersEl = document.getElementById('focus-elev-meters');
+  const feetEl = document.getElementById('focus-elev-feet');
+  if (!metersEl || !feetEl) return;
+
+  metersEl.addEventListener('input', () => {
+    const m = parseFloat(metersEl.textContent.replace(/[^\d.\-]/g, ''));
+    feetEl.textContent = isNaN(m) ? '' : (m * 3.28084).toFixed(1);
+  });
+  feetEl.addEventListener('input', () => {
+    const ft = parseFloat(feetEl.textContent.replace(/[^\d.\-]/g, ''));
+    metersEl.textContent = isNaN(ft) ? '' : (ft / 3.28084).toFixed(1);
+  });
+
+  // Copy buttons
+  document.querySelectorAll('#focus-elev-calc .elev-copyable').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.target);
+      if (target) {
+        navigator.clipboard.writeText(target.textContent.replace(/\s*(m|ft)$/, '').trim());
+        const toast = document.getElementById('focus-elev-toast');
+        if (toast) { toast.classList.add('visible'); setTimeout(() => toast.classList.remove('visible'), 1200); }
+      }
+    });
+  });
+}
+
+function updateFocusElevCalcForSpecimen(index) {
+  const spec = APP.specimens[index];
+  if (!spec) return;
+  const cached = tableDataCache[spec.filename];
+  if (!cached) return;
+
+  // Find elevation from formatted_json
+  const fj = cached.formatted_json || {};
+  let elevMeters = '';
+  for (const [key, val] of Object.entries(fj)) {
+    if (/elevation|altitude/i.test(key) && val !== '' && val !== undefined) {
+      const num = parseFloat(String(val));
+      if (!isNaN(num)) { elevMeters = num; break; }
+    }
+  }
+  const metersEl = document.getElementById('focus-elev-meters');
+  const feetEl = document.getElementById('focus-elev-feet');
+  if (metersEl) metersEl.textContent = elevMeters !== '' ? elevMeters : '';
+  if (feetEl) feetEl.textContent = elevMeters !== '' ? (elevMeters * 3.28084).toFixed(1) : '';
+
+  // COP90
+  const cop90 = cached.COP90_elevation_m;
+  const cop90Section = document.getElementById('focus-cop90-section');
+  if (cop90 !== undefined && cop90 !== '' && cop90 !== 'None' && !isNaN(parseFloat(cop90))) {
+    const copVal = parseFloat(cop90);
+    if (cop90Section) cop90Section.style.display = '';
+    const copM = document.getElementById('focus-cop90-meters');
+    const copFt = document.getElementById('focus-cop90-feet');
+    if (copM) copM.textContent = copVal + ' m';
+    if (copFt) copFt.textContent = (copVal * 3.28084).toFixed(1) + ' ft';
+  } else {
+    if (cop90Section) cop90Section.style.display = 'none';
+  }
+}
+
+function renderElevationDiscrepancySection() {
+  const container = document.getElementById('focus-elevation-list');
+  if (!container) return;
+  if (focusToolCategory !== 'elevation') { container.innerHTML = ''; return; }
+
+  const items = analyzeElevationDiscrepancy();
+  if (items.length === 0) {
+    container.innerHTML = '<div class="focus-no-clusters">No elevation data to compare with COP90</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="focus-specimen-header" style="position:sticky;top:0;z-index:1">
+      <span style="min-width:24px">#</span>
+      <span style="flex:1">Filename</span>
+      <span style="min-width:60px;text-align:right">Field</span>
+      <span style="min-width:60px;text-align:right">Value</span>
+      <span style="min-width:60px;text-align:right">COP90</span>
+      <span style="min-width:50px;text-align:right">Diff</span>
+      <span style="min-width:100px;text-align:center">Status</span>
+    </div>
+    ${items.map(item => `
+      <div class="focus-specimen-row focus-clickable-row" data-index="${item.index}">
+        <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
+        <span class="spec-filename">${escapeHtml(item.filename)}</span>
+        <span style="font-size:10px;color:var(--text-muted);min-width:60px;text-align:right">${escapeHtml(item.field)}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;min-width:60px;text-align:right">${item.value}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;min-width:60px;text-align:right;color:var(--text-muted)">${item.cop90}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;min-width:50px;text-align:right">${item.diff}m</span>
+        <span class="elev-status ${item.statusCls}">${item.status}</span>
+      </div>
+    `).join('')}
+  `;
+
+  container.querySelectorAll('.focus-clickable-row').forEach(row => {
+    row.addEventListener('click', () => loadFocusImage(parseInt(row.dataset.index)));
+  });
+}
+
+function updateSidebarFieldColors() {
+  const activeFields = focusToolCategory ? new Set(getEditorToolFields(focusToolCategory)) : new Set();
+  document.querySelectorAll('.focus-field-name').forEach(el => {
+    const field = el.closest('.focus-field-item')?.dataset.field;
+    el.classList.toggle('tool-active-field', field && activeFields.has(field));
+  });
+}
+
+function renderToolFieldToggle() {
+  const bar = document.getElementById('focus-tool-field-bar');
+  if (!bar) return;
+
+  if (!focusToolCategory) {
+    bar.innerHTML = '';
+    return;
+  }
+
+  const fields = getEditorToolFields(focusToolCategory);
+  if (fields.length === 0) {
+    bar.innerHTML = '';
+    return;
+  }
+
+  // If current field isn't in this tool's fields, select the first one
+  const activeField = fields.includes(focusField) ? focusField : fields[0];
+  if (activeField !== focusField) {
+    focusField = activeField;
+    focusFilter = null;
+  }
+
+  const sw = createSlideSwitch('focus-tool-field-switch', fields.map(f => ({
+    value: f,
+    label: f
+  })), activeField, (val) => {
+    focusField = val;
+    focusFilter = null;
+    // Update sidebar selection
+    const sidebar = document.getElementById('focus-sidebar');
+    if (sidebar) {
+      sidebar.querySelectorAll('.focus-field-item').forEach(i => {
+        i.classList.toggle('active', i.dataset.field === val);
+      });
+    }
+    renderFocusMain();
+  });
+
+  bar.innerHTML = sw.html;
+  sw.setup();
+
+  // Style the toggle with blue theme
+  const switchEl = bar.querySelector('.slide-switch');
+  if (switchEl) switchEl.classList.add('slide-switch-blue');
+}
+
+function applyFocusToolCategory(container) {
+  const cat = focusToolCategory;
+  const rows = container.querySelectorAll('.focus-tool-row');
+  let prevVisible = null;
+  // Remove old dynamic resize handles
+  container.querySelectorAll('.focus-v-resize-dynamic').forEach(h => h.remove());
+
+  rows.forEach(row => {
+    const cats = (row.dataset.toolCats || '').split(',');
+    const visible = cat ? cats.includes(cat) : false;
+    row.style.display = visible ? '' : 'none';
+    if (visible && prevVisible) {
+      // Insert a resize handle between consecutive visible rows
+      const handle = document.createElement('div');
+      handle.className = 'focus-v-resize focus-v-resize-dynamic';
+      handle.dataset.above = prevVisible.id;
+      handle.dataset.below = row.id;
+      row.parentNode.insertBefore(handle, row);
+    }
+    if (visible) prevVisible = row;
+  });
+
+  // Re-init resize handles for the newly inserted ones
+  initFocusVerticalResizeHandles(container);
+}
 
 function renderFocusMain() {
+  invalidateFieldIssueCounts(); // fresh counts for this render cycle
+
   const el = document.getElementById('focus-main');
   if (!el || !focusField) {
     if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Select a field from the sidebar</div>';
     return;
+  }
+
+  // Auto-select first field for active tool category if needed
+  if (focusToolCategory) {
+    const toolFields = getEditorToolFields(focusToolCategory);
+    if (toolFields.length > 0 && !toolFields.includes(focusField)) {
+      focusField = toolFields[0];
+      focusFilter = null;
+    }
   }
 
   const fieldValues = getAllValuesForField(focusField);
@@ -2824,30 +3524,37 @@ function renderFocusMain() {
         <div class="focus-specimens-list" id="focus-specimens-list"></div>
       `, '<span style="flex:1"></span><span style="font-size:9px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">Click text to edit</span>')}
     </div>
-    <div class="focus-v-resize" data-above="focus-row-0" data-below="focus-row-1"></div>
 
-    <div class="focus-row" id="focus-row-1">
-    ${section('clusters', 'Clusters', clusters.length > 0 ? ` &middot; <span style="color:var(--warning)">${clusters.length}</span>` : '', `
-      ${clusters.length === 0
-        ? '<div class="focus-no-clusters">No inconsistencies detected</div>'
-        : clusters.map((c, ci) => `
-          <div class="cluster-group">
-            <div class="cluster-values">
-              ${c.variants.map(v => `<span class="cluster-chip">${escapeHtml(v.value)}<span class="chip-count">&times;${v.count}</span></span>`).join('')}
-            </div>
-            <div class="cluster-merge-row">
-              <span style="font-size:11px;color:var(--text-muted)">Merge to:</span>
-              <input type="text" class="cluster-merge-input" id="cluster-input-${ci}" value="${escapeAttr(c.bestValue)}">
-              <button class="btn-sm btn-primary" data-cluster="${ci}">Merge</button>
-            </div>
-          </div>
-        `).join('')}
-    `)}
-    </div>
-    <div class="focus-v-resize" data-above="focus-row-1" data-below="focus-row-2"></div>
+    <div class="focus-v-resize" id="focus-v-resize-top" data-above="focus-row-0" data-below="focus-tools-area"></div>
 
-    <div class="focus-row" id="focus-row-2">
-    ${section('dates', 'Date Formats', dateFormats.formats.length > 0 ? ` &middot; ${dateFormats.formats.length} formats${dateFormats.inconsistent ? ' <span style="color:var(--warning)">!</span>' : ''}` : '', `
+    <div class="focus-tools-area" id="focus-tools-area">
+      <div class="focus-tool-category-bar">
+        <div id="focus-tool-category-switch-container"></div>
+      </div>
+      <div class="focus-tool-field-bar" id="focus-tool-field-bar"></div>
+
+      <div class="focus-tool-sections" id="focus-tool-sections">
+      <div class="focus-row focus-tool-row" id="focus-row-1" data-tool-cats="cluster">
+      ${section('clusters', 'Clusters', clusters.length > 0 ? ` &middot; <span style="color:var(--warning)">${clusters.length}</span>` : '', `
+        ${clusters.length === 0
+          ? '<div class="focus-no-clusters">No inconsistencies detected</div>'
+          : clusters.map((c, ci) => `
+            <div class="cluster-group">
+              <div class="cluster-values">
+                ${c.variants.map(v => `<span class="cluster-chip" data-filter-value="${escapeAttr(v.value)}" style="cursor:pointer" title="Click to filter">${escapeHtml(v.value)}<span class="chip-count">&times;${v.count}</span></span>`).join('')}
+              </div>
+              <div class="cluster-merge-row">
+                <span style="font-size:11px;color:var(--text-muted)">Merge to:</span>
+                <input type="text" class="cluster-merge-input" id="cluster-input-${ci}" value="${escapeAttr(c.bestValue)}">
+                <button class="btn-sm btn-primary" data-cluster="${ci}">Merge</button>
+              </div>
+            </div>
+          `).join('')}
+      `)}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-2" data-tool-cats="dates">
+      ${section('dates', 'Date Formats', dateFormats.formats.length > 0 ? ` &middot; ${dateFormats.formats.length} formats${dateFormats.inconsistent ? ' <span style="color:var(--warning)">!</span>' : ''}` : '', `
       ${dateFormats.formats.length === 0
         ? '<div class="focus-no-clusters">No date patterns detected</div>'
         : dateFormats.formats.map((f, fi) => {
@@ -2874,10 +3581,21 @@ function renderFocusMain() {
         }).join('')}
     `)}
     </div>
-    <div class="focus-v-resize" data-above="focus-row-2" data-below="focus-row-3"></div>
 
-    <div class="focus-row" id="focus-row-3">
-    ${section('catalog', 'Catalog Patterns', catalogPatterns.patterns.length > 0 ? ` &middot; ${catalogPatterns.patterns.length > 1 ? '<span style="color:var(--warning)">' + catalogPatterns.patterns.slice(1).reduce((s, p) => s + p.count, 0) + ' outliers</span>' : 'consistent'}` : '', `
+      <div class="focus-row focus-tool-row" id="focus-row-std" data-tool-cats="taxonomy,geography,collectors,coordinates">
+      ${fixedSection('standardize', 'Standardization Tools', '', `
+        <div id="focus-standardize-list"></div>
+      `)}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-auth" data-tool-cats="taxonomy">
+      ${fixedSection('authorship', 'Authorship Detection', '', `
+        <div id="focus-authorship-list"></div>
+      `)}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-3" data-tool-cats="patterns">
+      ${section('catalog', 'Catalog Patterns', catalogPatterns.patterns.length > 0 ? ` &middot; ${catalogPatterns.patterns.length > 1 ? '<span style="color:var(--warning)">' + catalogPatterns.patterns.slice(1).reduce((s, p) => s + p.count, 0) + ' outliers</span>' : 'consistent'}` : '', `
       ${catalogPatterns.patterns.length === 0
         ? '<div class="focus-no-clusters">No catalog patterns detected</div>'
         : catalogPatterns.patterns.map((p, pi) => {
@@ -2903,8 +3621,54 @@ function renderFocusMain() {
           `;
         }).join('')}
     `)}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-elev" data-tool-cats="elevation" style="display:flex;flex-direction:column">
+        ${fixedSection('elevation', 'Elevation Discrepancy', '', `
+          <div id="focus-elevation-list"></div>
+        `)}
+        <div class="focus-elev-calc" id="focus-elev-calc">
+          <div class="elev-calculator" style="border-top:1px solid var(--border)">
+            <div class="elev-calc-section">
+              <div class="elev-calc-title">Elevation Calculator</div>
+              <div class="elev-calc-fields">
+                <div class="elev-calc-field">
+                  <label>Meters</label>
+                  <div class="elev-calc-input" contenteditable="true" id="focus-elev-meters"></div>
+                  <button class="elev-copy-btn elev-copyable" data-target="focus-elev-meters">copy</button>
+                </div>
+                <div class="elev-calc-arrow">&#8596;</div>
+                <div class="elev-calc-field">
+                  <label>Feet</label>
+                  <div class="elev-calc-input" contenteditable="true" id="focus-elev-feet"></div>
+                  <button class="elev-copy-btn elev-copyable" data-target="focus-elev-feet">copy</button>
+                </div>
+              </div>
+            </div>
+            <div class="elev-toast" id="focus-elev-toast">Copied to clipboard</div>
+            <div class="elev-cop90-section" id="focus-cop90-section" style="display:none">
+              <div class="elev-calc-title">COP90 at GPS Location</div>
+              <div class="elev-cop90-values">
+                <div class="elev-cop90-item">
+                  <span id="focus-cop90-meters">—</span>
+                  <button class="elev-copy-btn elev-copyable" data-target="focus-cop90-meters">copy</button>
+                </div>
+                <span class="elev-cop90-sep">|</span>
+                <div class="elev-cop90-item">
+                  <span id="focus-cop90-feet">—</span>
+                  <button class="elev-copy-btn elev-copyable" data-target="focus-cop90-feet">copy</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     </div>
   `;
+
+  // Apply tool category visibility
+  applyFocusToolCategory(el);
 
   // Wire section header toggles (only collapsible ones with arrows)
   el.querySelectorAll('.focus-section-header:not(.focus-section-header-fixed)').forEach(header => {
@@ -2914,6 +3678,13 @@ function renderFocusMain() {
       const sec = header.closest('.focus-section');
       sec.classList.toggle('minimized');
       header.querySelector('.section-arrow').innerHTML = focusSectionState[key] ? '&#9654;' : '&#9660;';
+
+      // Reset the parent row's explicit height so flex layout takes over
+      const row = sec.closest('.focus-row, .focus-top-row');
+      if (row) {
+        row.style.height = '';
+        row.style.flex = '';
+      }
     });
   });
 
@@ -2935,6 +3706,16 @@ function renderFocusMain() {
       const ci = parseInt(btn.dataset.cluster);
       const input = document.getElementById(`cluster-input-${ci}`);
       mergeCluster(clusters[ci], input.value);
+    });
+  });
+
+  // Wire cluster chip clicks to filter specimens
+  el.querySelectorAll('.cluster-chip[data-filter-value]').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const val = chip.dataset.filterValue;
+      focusFilter = (focusFilter === val) ? null : val;
+      renderFocusMain();
     });
   });
 
@@ -2960,6 +3741,44 @@ function renderFocusMain() {
   const scopeContainer = document.getElementById('focus-scope-switch-container');
   if (scopeContainer) { scopeContainer.innerHTML = scopeSw.html; scopeSw.setup(); }
 
+  // Tool category switch (supports deselection by clicking active option)
+  const toolCats = getEditorToolCategories();
+  if (focusToolCategory && !toolCats.includes(focusToolCategory)) {
+    focusToolCategory = null;
+  }
+  const prevCat = focusToolCategory;
+  const catOptions = toolCats.map(c => ({
+    value: c,
+    label: c.charAt(0).toUpperCase() + c.slice(1)
+  }));
+  const catSw = createSlideSwitch('focus-tool-category-switch', catOptions, focusToolCategory || '', (val) => {
+    if (val === prevCat) {
+      // Clicking the already-active option deselects
+      focusToolCategory = null;
+    } else {
+      focusToolCategory = val;
+      // Auto-select first field for this tool category
+      const fields = getEditorToolFields(val);
+      if (fields.length > 0 && !fields.includes(focusField)) {
+        focusField = fields[0];
+        focusFilter = null;
+      }
+    }
+    renderFocusSidebar(getFocusCategories());
+    renderFocusMain();
+  });
+  const catContainer = document.getElementById('focus-tool-category-switch-container');
+  if (catContainer) {
+    catContainer.innerHTML = catSw.html;
+    catSw.setup();
+  }
+
+  // Field toggle for selected tool category
+  renderToolFieldToggle();
+
+  // Update sidebar field name colors based on active tool
+  updateSidebarFieldColors();
+
   // Wire all clickable specimen rows — click row for image, click value to edit
   el.querySelectorAll('.focus-clickable-row').forEach(row => {
     row.addEventListener('click', () => {
@@ -2976,8 +3795,12 @@ function renderFocusMain() {
     });
   });
 
-  renderFocusSpecimens();
-  renderFocusCarousel();
+  renderFocusSpecimens(fieldValues);
+  renderStandardizeSection();
+  renderAuthorshipSection();
+  renderElevationDiscrepancySection();
+  initFocusElevCalc();
+  renderFocusCarousel(fieldValues);
   updateFocusPrimaryState();
   updateFocusConfirmButtons();
 }
@@ -3059,16 +3882,22 @@ function analyzeCatalogPatterns(fieldValues) {
   return { patterns, maxCount, dominantPattern };
 }
 
-function renderFocusSpecimens() {
+function renderFocusSpecimens(cachedFieldValues) {
   const list = document.getElementById('focus-specimens-list');
   if (!list) return;
 
-  const fieldValues = getAllValuesForField(focusField);
+  const fieldValues = cachedFieldValues || getAllValuesForField(focusField);
   const filtered = focusFilter !== null
     ? fieldValues.filter(v => v.value === focusFilter)
     : fieldValues;
 
-  list.innerHTML = filtered.map(v => {
+  list.innerHTML = `
+    <div class="focus-specimen-header">
+      <span class="focus-spec-hdr-status">Status</span>
+      <span class="focus-spec-hdr-filename">Filename</span>
+      <span class="focus-spec-hdr-field">${escapeHtml(focusField)}</span>
+    </div>
+  ` + filtered.map(v => {
     const stCls = v.cellState === 'limbo' ? 'focus-cell-limbo' : (v.cellState === 'accepted' ? 'focus-cell-accepted' : 'focus-cell-unaccepted');
     const valDisplay = v.value === '' ? '<span class="cell-empty-placeholder">(empty)</span>' : escapeHtml(v.value);
     // Flair color based on state
@@ -3084,9 +3913,11 @@ function renderFocusSpecimens() {
     } else {
       flairColor = '#000';
     }
+    const isFlagged = APP.state.specimens[v.filename]?.flagged;
     return `
       <div class="focus-specimen-row focus-clickable-row" data-index="${v.index}">
         <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${v.index + 1}</span>
+        <span class="focus-flag ${isFlagged ? 'flagged' : ''}" data-index="${v.index}" title="${isFlagged ? 'Unflag specimen' : 'Flag specimen'}">${isFlagged ? '&#9873;' : '&#9872;'}</span>
         <span class="focus-goto" data-index="${v.index}" title="Open in form view">&#9998;</span>
         <span class="focus-flair" style="background:${flairColor}"></span>
         <span class="spec-filename">${escapeHtml(v.filename)}</span>
@@ -3098,6 +3929,33 @@ function renderFocusSpecimens() {
   list.querySelectorAll('.focus-specimen-row').forEach(row => {
     row.addEventListener('click', () => {
       loadFocusImage(parseInt(row.dataset.index));
+    });
+  });
+
+  list.querySelectorAll('.focus-flag').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.index);
+      const spec = APP.specimens[idx];
+      const st = APP.state.specimens[spec.filename];
+      if (!st) return;
+      st.flagged = !st.flagged;
+      // Update icon immediately
+      btn.classList.toggle('flagged', st.flagged);
+      btn.innerHTML = st.flagged ? '&#9873;' : '&#9872;';
+      btn.title = st.flagged ? 'Unflag specimen' : 'Flag specimen';
+      updateNavBar();
+      scheduleAutoSaveReviewed(spec.filename);
+      if (st.flagged) {
+        setTimeout(() => {
+          const note = prompt('Flag note (optional):');
+          st.flag_note = note || '';
+          scheduleSaveState();
+        }, 50);
+      } else {
+        st.flag_note = '';
+        scheduleSaveState();
+      }
     });
   });
 
@@ -3119,12 +3977,12 @@ function renderFocusSpecimens() {
   });
 }
 
-function renderFocusCarousel() {
+function renderFocusCarousel(cachedFieldValues) {
   const carousel = document.getElementById('focus-carousel');
   if (!carousel) return;
 
   // Use same filtered list as specimens section
-  const fieldValues = focusField ? getAllValuesForField(focusField) : [];
+  const fieldValues = cachedFieldValues || (focusField ? getAllValuesForField(focusField) : []);
   const filtered = focusFilter !== null
     ? fieldValues.filter(v => v.value === focusFilter)
     : fieldValues;
@@ -3168,15 +4026,28 @@ function renderFocusCarousel() {
     });
   });
 
-  // Lazy-load thumbnail images
-  carousel.querySelectorAll('.focus-carousel-thumb').forEach(async (thumb) => {
-    const idx = parseInt(thumb.dataset.index);
-    const spec = APP.specimens[idx];
-    if (!spec) return;
-    const dataUrl = await window.api.getImage(APP.folderPath, spec.filename, tableImageType);
-    if (dataUrl && thumb.isConnected) {
-      thumb.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(spec.filename)}">`;
+  // Lazy-load thumbnail images only when visible
+  if (carousel._thumbObserver) carousel._thumbObserver.disconnect();
+  carousel._thumbObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const thumb = entry.target;
+      if (thumb.dataset.loaded) continue;
+      thumb.dataset.loaded = '1';
+      carousel._thumbObserver.unobserve(thumb);
+      const idx = parseInt(thumb.dataset.index);
+      const spec = APP.specimens[idx];
+      if (!spec) continue;
+      window.api.getImage(APP.folderPath, spec.filename, tableImageType).then(dataUrl => {
+        if (dataUrl && thumb.isConnected) {
+          thumb.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(spec.filename)}">`;
+        }
+      });
     }
+  }, { root: carousel, rootMargin: '100px' });
+
+  carousel.querySelectorAll('.focus-carousel-thumb').forEach(thumb => {
+    carousel._thumbObserver.observe(thumb);
   });
 }
 
@@ -3220,6 +4091,7 @@ async function loadFocusImage(index) {
   const spec = APP.specimens[index];
   container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
   updateFocusPrimaryState();
+  updateFocusElevCalcForSpecimen(index);
   const dataUrl = await window.api.getImage(APP.folderPath, spec.filename, tableImageType);
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(spec.filename)}">`;
@@ -3230,38 +4102,40 @@ async function loadFocusImage(index) {
 }
 
 function startFocusCellEdit(cell, specimenIndex, fieldName) {
-  if (cell.querySelector('input')) return;
+  if (cell.querySelector('input, textarea')) return;
 
   const spec = APP.specimens[specimenIndex];
-  const cached = tableDataCache[spec.filename];
-  const fj = cached?.formatted_json || {};
-  const specState = APP.state.specimens[spec.filename];
-
-  const currentValue = specState?.accepted_fields?.[fieldName]?.value
-    ?? (fj[fieldName] !== undefined ? String(fj[fieldName]) : '');
+  const currentValue = getCurrentFieldValue(spec, fieldName);
 
   const originalText = cell.textContent;
   const originalStyle = cell.getAttribute('style') || '';
 
-  cell.innerHTML = `<input type="text" class="cell-edit-input" value="${escapeAttr(currentValue)}" style="font-size:11px;padding:1px 4px;width:100%">`;
-  const input = cell.querySelector('input');
+  // Allow text wrapping during edit
+  cell.style.whiteSpace = 'normal';
+  cell.style.overflow = 'visible';
+  cell.style.textOverflow = 'unset';
+  cell.innerHTML = `<textarea class="cell-edit-input" style="font-size:11px;padding:2px 4px;width:100%;resize:vertical;min-height:1.6em;font-family:var(--font-mono);line-height:1.4">${escapeHtml(currentValue)}</textarea>`;
+  const input = cell.querySelector('textarea');
+  // Auto-size to content
+  input.style.height = input.scrollHeight + 'px';
   input.focus();
   input.select();
 
-  const commit = () => {
+  const save = (force) => {
     const newValue = input.value;
     cell.textContent = newValue;
     cell.setAttribute('style', originalStyle);
 
-    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
-      APP.state.specimens[spec.filename].unconfirmed_fields = {};
+    // Enter always marks as unconfirmed; blur only if value changed
+    if (force || newValue !== currentValue) {
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
+        APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      }
+      APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
+      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+      scheduleSaveState();
     }
-
-    // Focus edits go to unconfirmed_fields (limbo) until user confirms
-    APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
-    APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-    scheduleSaveState();
 
     // Refresh focus panels
     renderFocusSidebar(getFocusCategories());
@@ -3273,10 +4147,11 @@ function startFocusCellEdit(cell, specimenIndex, fieldName) {
     cell.setAttribute('style', originalStyle);
   };
 
-  input.addEventListener('blur', commit);
+  const onBlur = () => save(false);
+  input.addEventListener('blur', onBlur);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { input.removeEventListener('blur', commit); commit(); }
-    else if (e.key === 'Escape') { input.removeEventListener('blur', commit); cancel(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.removeEventListener('blur', onBlur); save(true); }
+    else if (e.key === 'Escape') { input.removeEventListener('blur', onBlur); cancel(); }
   });
 }
 
@@ -3449,6 +4324,17 @@ function openSettingsPopup() {
       </div>
 
 
+      <div class="settings-row">
+        <div class="settings-label">
+          <div>Image Cache Size</div>
+          <div class="settings-desc">Number of decoded images kept in memory (100–2000). Default 500. If your device has more than 8 GB of RAM you can safely increase this to 2000 for faster browsing of large projects.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="range" min="100" max="2000" step="100" id="setting-image-cache" value="${APP.settings.imageCacheSize || 500}" style="width:140px;accent-color:var(--accent)">
+          <span id="setting-image-cache-label" style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);min-width:40px">${APP.settings.imageCacheSize || 500}</span>
+        </div>
+      </div>
+
       <div class="settings-row" style="flex-direction:column;align-items:stretch">
         <div class="settings-label" style="margin-bottom:8px">
           <div>Row Colors (Gray)</div>
@@ -3517,6 +4403,13 @@ function openSettingsPopup() {
     toggle.classList.toggle('locked', !APP.settings.acceptAllEnabled);
     toggle.classList.toggle('unlocked', APP.settings.acceptAllEnabled);
     toggle.querySelector('.table-lock-label').textContent = APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled';
+  });
+
+  // Image cache slider
+  document.getElementById('setting-image-cache').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    APP.settings.imageCacheSize = val;
+    document.getElementById('setting-image-cache-label').textContent = val;
   });
 
   // Row gray sliders
@@ -3615,6 +4508,7 @@ async function performProjectReset() {
 
   // Re-scan folder and reload
   APP.specimens = await window.api.scanFolder(APP.folderPath);
+  rebuildSpecimenIndexMap();
   if (APP.specimens.length > 0) {
     await loadSpecimen(0);
   }
