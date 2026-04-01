@@ -1,6 +1,6 @@
 {
   "name": "vouchervisiongo-editor",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Lightweight desktop editor for reviewing VoucherVisionGO transcription results",
   "main": "main.js",
   "scripts": {
@@ -22,6 +22,7 @@
   "build": {
     "appId": "com.vouchervision.go-editor",
     "productName": "VoucherVisionGO Editor",
+    "artifactName": "VoucherVisionGO-Editor-${version}-${arch}.${ext}",
     "directories": {
       "output": "build"
     },
@@ -41,6 +42,12 @@
         { "target": "nsis", "arch": ["x64"] }
       ],
       "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "artifactName": "VoucherVisionGO-Editor-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "VoucherVisionGO-Editor-${version}-${arch}.${ext}"
     },
     "linux": {
       "target": "AppImage",

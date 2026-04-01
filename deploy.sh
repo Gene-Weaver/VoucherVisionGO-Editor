@@ -68,13 +68,13 @@ if [ "$1" != "--skip-release" ] && [ "$1" != "--skip-builds" ]; then
     git push origin ":refs/tags/$TAG" 2>/dev/null || true
 
     gh release create "$TAG" \
-      "build/VoucherVisionGO Editor-${VERSION}-arm64.dmg#macOS (Apple Silicon)" \
-      "build/VoucherVisionGO Editor-${VERSION}.dmg#macOS (Intel)" \
-      "build/VoucherVisionGO Editor-${VERSION}-arm64-mac.zip" \
-      "build/VoucherVisionGO Editor-${VERSION}-mac.zip" \
-      "build/VoucherVisionGO Editor ${VERSION}.exe#Windows Portable (64-bit)" \
-      "build/VoucherVisionGO Editor Setup ${VERSION}.exe#Windows Installer (64-bit, auto-update)" \
-      "build/VoucherVisionGO Editor-${VERSION}.AppImage#Linux (64-bit)" \
+      "build/VoucherVisionGO-Editor-${VERSION}-arm64.dmg#macOS (Apple Silicon)" \
+      "build/VoucherVisionGO-Editor-${VERSION}-x64.dmg#macOS (Intel)" \
+      "build/VoucherVisionGO-Editor-${VERSION}-arm64.zip" \
+      "build/VoucherVisionGO-Editor-${VERSION}-x64.zip" \
+      "build/VoucherVisionGO-Editor-${VERSION}-x64.exe#Windows Portable (64-bit)" \
+      "build/VoucherVisionGO-Editor-Setup-${VERSION}-x64.exe#Windows Installer (64-bit, auto-update)" \
+      "build/VoucherVisionGO-Editor-${VERSION}-x64.AppImage#Linux (64-bit)" \
       "build/latest-mac.yml" \
       "build/latest.yml" \
       "build/latest-linux.yml" \
@@ -89,13 +89,13 @@ else
     echo ""
     echo "To release manually:"
     echo "  gh release create $TAG \\"
-    echo "    \"build/VoucherVisionGO Editor-${VERSION}-arm64.dmg\" \\"
-    echo "    \"build/VoucherVisionGO Editor-${VERSION}.dmg\" \\"
-    echo "    \"build/VoucherVisionGO Editor-${VERSION}-arm64-mac.zip\" \\"
-    echo "    \"build/VoucherVisionGO Editor-${VERSION}-mac.zip\" \\"
-    echo "    \"build/VoucherVisionGO Editor ${VERSION}.exe\" \\"
-    echo "    \"build/VoucherVisionGO Editor Setup ${VERSION}.exe\" \\"
-    echo "    \"build/VoucherVisionGO Editor-${VERSION}.AppImage\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-arm64.dmg\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.dmg\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-arm64.zip\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.zip\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.exe\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-Setup-${VERSION}-x64.exe\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.AppImage\" \\"
     echo "    \"build/latest-mac.yml\" \"build/latest.yml\" \"build/latest-linux.yml\" \\"
     echo "    --repo Gene-Weaver/VoucherVisionGO-Editor \\"
     echo "    --title \"VoucherVisionGO Editor $TAG\""
