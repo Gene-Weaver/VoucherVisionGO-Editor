@@ -47,7 +47,7 @@ fi
 
 # 4. Summary
 echo "=== Build outputs ==="
-ls -lhS build/*.dmg build/*.exe build/*.AppImage build/latest*.yml 2>/dev/null
+ls -lhS build/*.dmg build/*.zip build/*.exe build/*.AppImage build/latest*.yml 2>/dev/null
 echo ""
 echo "=== Demo ==="
 ls -lh "$WEBPAGE_DIR/editor-demo.html"
@@ -70,6 +70,8 @@ if [ "$1" != "--skip-release" ] && [ "$1" != "--skip-builds" ]; then
     gh release create "$TAG" \
       "build/VoucherVisionGO Editor-${VERSION}-arm64.dmg#macOS (Apple Silicon)" \
       "build/VoucherVisionGO Editor-${VERSION}.dmg#macOS (Intel)" \
+      "build/VoucherVisionGO Editor-${VERSION}-arm64-mac.zip" \
+      "build/VoucherVisionGO Editor-${VERSION}-mac.zip" \
       "build/VoucherVisionGO Editor ${VERSION}.exe#Windows Portable (64-bit)" \
       "build/VoucherVisionGO Editor Setup ${VERSION}.exe#Windows Installer (64-bit, auto-update)" \
       "build/VoucherVisionGO Editor-${VERSION}.AppImage#Linux (64-bit)" \
@@ -89,6 +91,8 @@ else
     echo "  gh release create $TAG \\"
     echo "    \"build/VoucherVisionGO Editor-${VERSION}-arm64.dmg\" \\"
     echo "    \"build/VoucherVisionGO Editor-${VERSION}.dmg\" \\"
+    echo "    \"build/VoucherVisionGO Editor-${VERSION}-arm64-mac.zip\" \\"
+    echo "    \"build/VoucherVisionGO Editor-${VERSION}-mac.zip\" \\"
     echo "    \"build/VoucherVisionGO Editor ${VERSION}.exe\" \\"
     echo "    \"build/VoucherVisionGO Editor Setup ${VERSION}.exe\" \\"
     echo "    \"build/VoucherVisionGO Editor-${VERSION}.AppImage\" \\"
