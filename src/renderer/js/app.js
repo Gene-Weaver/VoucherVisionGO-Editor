@@ -5193,10 +5193,10 @@ function timeAgo(isoString) {
 function showUpdateNotification(data) {
   if (document.querySelector('.settings-popup')) return;
   const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:14px 18px;z-index:10000;box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:340px;cursor:pointer';
+  toast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:21px 27px;z-index:10000;box-shadow:0 6px 30px rgba(0,0,0,0.5);max-width:510px;cursor:pointer;pointer-events:auto';
   toast.innerHTML = `
-    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">Update Available: v${escapeHtml(data.version)}</div>
-    <div style="font-size:11px;color:var(--text-muted)">Open Settings to update</div>
+    <div style="font-size:20px;font-weight:600;color:var(--text-primary);margin-bottom:6px">Update Available: v${escapeHtml(data.version)}</div>
+    <div style="font-size:16px;color:var(--text-muted)">Open Settings to update</div>
   `;
   toast.addEventListener('click', () => { toast.remove(); openSettingsPopup(); });
   document.body.appendChild(toast);

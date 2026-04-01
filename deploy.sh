@@ -25,21 +25,44 @@ echo ""
 if [ "$1" != "--skip-builds" ]; then
     unset ELECTRON_RUN_AS_NODE
 
-    echo "Building macOS (arm64 - Apple Silicon)..."
-    npm run dist -- --mac --arm64 2>&1 | grep -E "building|packaging|signing"
+    echo "Building all platforms in parallel..."
     echo ""
 
-    echo "Building macOS (x64 - Intel)..."
-    npm run dist -- --mac --x64 2>&1 | grep -E "building|packaging|signing"
-    echo ""
+    # Run all four builds in parallel, each logging to a temp file
+    LOGDIR=$(mktemp -d)
+    trap "rm -rf $LOGDIR" EXIT
 
-    echo "Building Windows (x64 - Portable + NSIS Installer)..."
-    npm run dist -- --win --x64 2>&1 | grep -E "building|packaging"
-    echo ""
+    (echo "[mac-arm64] Building..." && npm run dist -- --mac --arm64 2>&1 | grep -E "building|packaging|signing" | sed 's/^/  [mac-arm64] /' && echo "[mac-arm64] Done.") > "$LOGDIR/mac-arm64.log" 2>&1 &
+    PID_MAC_ARM=$!
 
-    echo "Building Linux (x64)..."
-    npm run dist -- --linux --x64 2>&1 | grep -E "building|packaging"
-    echo ""
+    (echo "[mac-x64] Building..." && npm run dist -- --mac --x64 2>&1 | grep -E "building|packaging|signing" | sed 's/^/  [mac-x64] /' && echo "[mac-x64] Done.") > "$LOGDIR/mac-x64.log" 2>&1 &
+    PID_MAC_X64=$!
+
+    (echo "[win-x64] Building..." && npm run dist -- --win --x64 2>&1 | grep -E "building|packaging" | sed 's/^/  [win-x64] /' && echo "[win-x64] Done.") > "$LOGDIR/win-x64.log" 2>&1 &
+    PID_WIN=$!
+
+    (echo "[linux-x64] Building..." && npm run dist -- --linux --x64 2>&1 | grep -E "building|packaging" | sed 's/^/  [linux-x64] /' && echo "[linux-x64] Done.") > "$LOGDIR/linux-x64.log" 2>&1 &
+    PID_LINUX=$!
+
+    # Wait for all and track failures
+    FAILED=0
+    for PID_NAME in "mac-arm64:$PID_MAC_ARM" "mac-x64:$PID_MAC_X64" "win-x64:$PID_WIN" "linux-x64:$PID_LINUX"; do
+        NAME="${PID_NAME%%:*}"
+        PID="${PID_NAME##*:}"
+        if wait "$PID"; then
+            echo "  ✓ $NAME completed"
+        else
+            echo "  ✗ $NAME FAILED (exit $?)"
+            FAILED=1
+        fi
+        cat "$LOGDIR/$NAME.log"
+        echo ""
+    done
+
+    if [ "$FAILED" = "1" ]; then
+        echo "ERROR: One or more builds failed. Aborting."
+        exit 1
+    fi
 else
     echo "Skipping app builds (--skip-builds)"
     echo ""
