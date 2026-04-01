@@ -1782,16 +1782,30 @@ function initFocusVerticalResizeHandles(container) {
   });
 }
 
+function saveColumnWidths() {
+  const table = document.querySelector('.batch-table');
+  if (!table || !APP.state) return;
+  const widths = {};
+  table.querySelectorAll('th[data-sort]').forEach(th => {
+    widths[th.dataset.sort] = th.offsetWidth;
+  });
+  APP.state.tableColumnWidths = widths;
+  scheduleSaveState();
+}
+
 function initColumnResize(container) {
   const table = container.querySelector('.batch-table');
   if (!table) return;
 
   const ths = table.querySelectorAll('th');
+  const saved = APP.state?.tableColumnWidths || {};
 
-  // Capture auto-calculated widths so dragging has a starting point
+  // Restore saved widths or capture auto-calculated
   ths.forEach(th => {
-    th.style.width = th.offsetWidth + 'px';
-    th.style.minWidth = th.offsetWidth + 'px';
+    const key = th.dataset.sort;
+    const w = (key && saved[key]) ? saved[key] : th.offsetWidth;
+    th.style.width = w + 'px';
+    th.style.minWidth = w + 'px';
   });
 
   ths.forEach(th => {
@@ -1828,6 +1842,7 @@ function initColumnResize(container) {
 
       th.style.width = maxWidth + 'px';
       th.style.minWidth = maxWidth + 'px';
+      saveColumnWidths();
     });
 
     handle.addEventListener('mousedown', (e) => {
@@ -1852,6 +1867,7 @@ function initColumnResize(container) {
         document.body.style.userSelect = '';
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
+        saveColumnWidths();
       };
 
       document.addEventListener('mousemove', onMove);
@@ -2827,19 +2843,48 @@ const focusSectionState = { values: false, clusters: false, dates: false, catalo
 let focusToolScope = 'field'; // 'field' or 'everything'
 let focusToolCategory = null; // dynamic from editor_tools, null = no tools shown
 
+// Default tool categories when prompt has no editor_tools
+const DEFAULT_TOOL_CATEGORIES = ['dates', 'taxonomy', 'cluster', 'geography', 'collectors', 'coordinates', 'patterns', 'elevation'];
+
 // Get available tool categories from prompt's editor_tools mapping
 function getEditorToolCategories() {
   const et = APP.currentPrompt?.editor_tools || {};
-  return Object.keys(et).map(k => k.toLowerCase());
+  const fromPrompt = Object.keys(et).map(k => k.toLowerCase());
+  if (fromPrompt.length > 0) return fromPrompt;
+
+  // No editor_tools in prompt — use defaults, but also include any categories with user-added fields
+  const overrides = APP.state?.toolFieldOverrides || {};
+  const withUserFields = Object.keys(overrides).filter(cat =>
+    overrides[cat]?.added?.length > 0
+  );
+  const cats = [...DEFAULT_TOOL_CATEGORIES];
+  for (const c of withUserFields) {
+    if (!cats.includes(c)) cats.push(c);
+  }
+  return cats;
 }
 
 // Get fields for a tool category from editor_tools
 function getEditorToolFields(category) {
   const et = APP.currentPrompt?.editor_tools || {};
+  let baseFields = [];
   for (const [k, v] of Object.entries(et)) {
-    if (k.toLowerCase() === category.toLowerCase()) return v || [];
+    if (k.toLowerCase() === category.toLowerCase()) { baseFields = [...(v || [])]; break; }
   }
-  return [];
+
+  // Apply user overrides from state
+  const overrides = APP.state?.toolFieldOverrides?.[category.toLowerCase()];
+  if (overrides) {
+    if (overrides.added) {
+      for (const f of overrides.added) {
+        if (!baseFields.includes(f)) baseFields.push(f);
+      }
+    }
+    if (overrides.removed) {
+      baseFields = baseFields.filter(f => !overrides.removed.includes(f));
+    }
+  }
+  return baseFields;
 }
 
 // Section-to-category mapping — built dynamically
@@ -3353,8 +3398,16 @@ function renderToolFieldToggle() {
   }
 
   const fields = getEditorToolFields(focusToolCategory);
+
+  // Show add button even when no fields exist
   if (fields.length === 0) {
-    bar.innerHTML = '';
+    bar.innerHTML = `
+      <button class="btn-sm focus-field-add-btn" id="focus-field-add" title="Add a field to this tool">+</button>
+      <span style="font-size:11px;color:var(--text-muted)">No fields assigned — click + to add</span>
+    `;
+    document.getElementById('focus-field-add')?.addEventListener('click', () => {
+      showAddFieldPopup(focusToolCategory, fields);
+    });
     return;
   }
 
@@ -3381,12 +3434,101 @@ function renderToolFieldToggle() {
     renderFocusMain();
   });
 
-  bar.innerHTML = sw.html;
+  bar.innerHTML = `
+    <button class="btn-sm focus-field-add-btn" id="focus-field-add" title="Add a field to this tool">+</button>
+    ${sw.html}
+    <button class="btn-sm focus-field-remove-btn" id="focus-field-remove" title="Remove selected field from this tool">&minus;</button>
+  `;
   sw.setup();
 
   // Style the toggle with blue theme
   const switchEl = bar.querySelector('.slide-switch');
   if (switchEl) switchEl.classList.add('slide-switch-blue');
+
+  // Add field button
+  document.getElementById('focus-field-add')?.addEventListener('click', () => {
+    showAddFieldPopup(focusToolCategory, fields);
+  });
+
+  // Remove field button
+  document.getElementById('focus-field-remove')?.addEventListener('click', () => {
+    if (!focusField || !focusToolCategory) return;
+    if (!fields.includes(focusField)) return;
+    if (!APP.state.toolFieldOverrides) APP.state.toolFieldOverrides = {};
+    const cat = focusToolCategory.toLowerCase();
+    if (!APP.state.toolFieldOverrides[cat]) APP.state.toolFieldOverrides[cat] = {};
+    if (!APP.state.toolFieldOverrides[cat].removed) APP.state.toolFieldOverrides[cat].removed = [];
+    if (!APP.state.toolFieldOverrides[cat].removed.includes(focusField)) {
+      APP.state.toolFieldOverrides[cat].removed.push(focusField);
+    }
+    // Also remove from added if it was user-added
+    if (APP.state.toolFieldOverrides[cat].added) {
+      APP.state.toolFieldOverrides[cat].added = APP.state.toolFieldOverrides[cat].added.filter(f => f !== focusField);
+    }
+    scheduleSaveState();
+    focusField = null;
+    renderFocusSidebar(getFocusCategories());
+    renderFocusMain();
+  });
+}
+
+function showAddFieldPopup(category, currentFields) {
+  // Get all available fields
+  const first = APP.specimens[0] ? tableDataCache[APP.specimens[0].filename] : null;
+  const allFields = first ? Object.keys(first.formatted_json || {}) : [];
+  const available = allFields.filter(f => !currentFields.includes(f));
+
+  if (available.length === 0) {
+    alert('All fields are already assigned to this tool.');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;max-width:350px;max-height:70vh;display:flex;flex-direction:column;cursor:default" onclick="event.stopPropagation()">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px">Add field to ${escapeHtml(category)}</div>
+      <div style="overflow-y:auto;flex:1">
+        ${available.map(f => `
+          <div class="add-field-option" data-field="${escapeAttr(f)}" style="padding:6px 12px;cursor:pointer;font-size:12px;font-family:var(--font-mono);color:var(--cat-0);border-radius:var(--radius-sm)">
+            ${escapeHtml(f)}
+          </div>
+        `).join('')}
+      </div>
+      <div style="margin-top:10px;text-align:right">
+        <button class="btn-sm" id="add-field-cancel">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', () => overlay.remove());
+  document.getElementById('add-field-cancel').addEventListener('click', () => overlay.remove());
+
+  overlay.querySelectorAll('.add-field-option').forEach(opt => {
+    opt.addEventListener('mouseenter', () => { opt.style.background = 'var(--bg-hover)'; });
+    opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
+    opt.addEventListener('click', () => {
+      const field = opt.dataset.field;
+      if (!APP.state.toolFieldOverrides) APP.state.toolFieldOverrides = {};
+      const cat = category.toLowerCase();
+      if (!APP.state.toolFieldOverrides[cat]) APP.state.toolFieldOverrides[cat] = {};
+      if (!APP.state.toolFieldOverrides[cat].added) APP.state.toolFieldOverrides[cat].added = [];
+      if (!APP.state.toolFieldOverrides[cat].added.includes(field)) {
+        APP.state.toolFieldOverrides[cat].added.push(field);
+      }
+      // Remove from removed list if it was there
+      if (APP.state.toolFieldOverrides[cat].removed) {
+        APP.state.toolFieldOverrides[cat].removed = APP.state.toolFieldOverrides[cat].removed.filter(f => f !== field);
+      }
+      scheduleSaveState();
+      overlay.remove();
+      focusField = field;
+      renderFocusSidebar(getFocusCategories());
+      renderFocusMain();
+    });
+  });
 }
 
 function applyFocusToolCategory(container) {
