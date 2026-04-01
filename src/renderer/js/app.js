@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function showView(viewName) {
   APP.currentView = viewName;
+  if (viewName !== 'table') tableSelectedCell = null;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const viewMap = { 'folder-picker': 'folder-picker', 'review': 'review', 'table': 'table', 'focus': 'focus' };
   const el = document.getElementById(`${viewMap[viewName] || viewName}-view`);
@@ -113,11 +114,14 @@ function updateNavBar() {
 
     // Export button only in top nav
     toggleEl.innerHTML = `
+      <button class="btn-sm btn-rewind" id="btn-rewind" title="Rewind actions" style="display:none">Rewind (0)</button>
       <button class="btn-sm btn-success" id="btn-export">Export Project</button>
       <button class="btn-sm btn-icon settings-icon-btn" id="btn-settings" title="Settings">&#9881;</button>
     `;
+    document.getElementById('btn-rewind').addEventListener('click', openRewindPopup);
     document.getElementById('btn-export').addEventListener('click', exportProject);
     document.getElementById('btn-settings').addEventListener('click', openSettingsPopup);
+    updateRewindButton();
   } else {
     pathEl.textContent = '';
     changeBtnEl.style.display = 'none';
@@ -231,6 +235,9 @@ async function loadFolder(folderPath) {
     const idx = APP.specimens.findIndex(s => s.filename === APP.state.current_specimen);
     if (idx >= 0) APP.currentIndex = idx;
   }
+
+  // Load rewind history checkpoint
+  await loadRewindCheckpoint();
 
   showView('review');
   await loadSpecimen(APP.currentIndex);
@@ -1058,6 +1065,8 @@ function renderCategoryForm() {
       const specState = APP.state.specimens[spec.filename];
       if (!specState) return;
 
+      const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
+
       // Get current value: from accepted, or from the contenteditable input, or from original JSON
       const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
       const currentValue = specState.accepted_fields?.[field]?.value
@@ -1073,6 +1082,9 @@ function renderCategoryForm() {
 
       // Un-confirm categories
       autoConfirmCategories(spec.filename);
+
+      rewindRecord('markUncertain', 'Mark Uncertain', `"${field}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
+
       scheduleSaveState();
       scheduleAutoSaveReviewed(spec.filename);
 
@@ -1089,17 +1101,24 @@ function renderCategoryForm() {
     btn.addEventListener('click', () => {
       const field = btn.dataset.field;
       const spec = APP.specimens[APP.currentIndex];
+      const specState = APP.state.specimens[spec.filename];
+      if (!specState) return;
+
+      // Capture BEFORE any mutation (includes unconfirmed value that's about to be deleted)
+      const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
 
       // Read the latest value from the contenteditable div (user may have edited further)
       const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
       const latestValue = inputEl
         ? inputEl.textContent.replace(/\n/g, ' ').trim()
-        : APP.state.specimens[spec.filename]?.unconfirmed_fields?.[field] || '';
+        : specState.unconfirmed_fields?.[field] || '';
 
-      // Clear unconfirmed state, then accept with appropriate source
-      if (APP.state.specimens[spec.filename]?.unconfirmed_fields) {
-        delete APP.state.specimens[spec.filename].unconfirmed_fields[field];
+      // Clear unconfirmed state
+      if (specState.unconfirmed_fields) {
+        delete specState.unconfirmed_fields[field];
       }
+
+      // Determine source and accept
       const fj = APP.currentSpecimen.formatted_json || {};
       const aiValue = fj[field] !== undefined ? String(fj[field]) : '';
       let source;
@@ -1107,12 +1126,25 @@ function renderCategoryForm() {
       else if (latestValue === '' && aiValue === '') source = 'confirmed_empty';
       else if (aiValue === '' && latestValue !== '') source = 'user_added';
       else source = 'edited';
-      acceptField(field, latestValue, source);
+
+      specState.accepted_fields[field] = { value: latestValue, source };
+      specState.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+
+      rewindRecord('confirmUnconfirmed', 'Confirm Field', `"${field}" = "${latestValue}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
+
+      scheduleSaveState();
+      scheduleAutoSaveReviewed(spec.filename);
       renderCategoryForm();
+      renderCategoryTabs();
+      renderCategoryFooter();
+      renderBounceBar();
     });
   });
 
   el.querySelectorAll('.field-input').forEach(input => {
+    let _rwInputBefore = null;
+    let _rwInputTimeout = null;
     input.addEventListener('input', () => {
       const field = input.dataset.field;
       const value = input.textContent.replace(/\n/g, ' ').trim();
@@ -1121,9 +1153,20 @@ function renderCategoryForm() {
       const hasUnconfirmed = specState?.unconfirmed_fields?.[field] !== undefined;
 
       if (hasUnconfirmed) {
+        // Capture before first keystroke in this typing burst
+        if (!_rwInputBefore) {
+          _rwInputBefore = rewindCapture([spec.filename], [field]);
+        }
         // Field is in unconfirmed state — keep updating unconfirmed, don't accept yet
         specState.unconfirmed_fields[field] = value;
         scheduleSaveState();
+        // Debounce the rewind record — commit after 1s of no typing
+        if (_rwInputTimeout) clearTimeout(_rwInputTimeout);
+        _rwInputTimeout = setTimeout(() => {
+          rewindRecord('editUnconfirmed', 'Edit Field', `"${field}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwInputBefore);
+          _rwInputBefore = null;
+          _rwInputTimeout = null;
+        }, 1000);
       } else {
         // Normal flow — accept the field
         const fj = APP.currentSpecimen.formatted_json || {};
@@ -1196,6 +1239,7 @@ function acceptField(field, value, source, updateInput = true) {
   const specState = APP.state.specimens[spec.filename];
   if (!specState) return;
 
+  const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
   specState.accepted_fields[field] = { value, source };
   specState.last_touched = new Date().toISOString();
 
@@ -1227,6 +1271,8 @@ function acceptField(field, value, source, updateInput = true) {
 
   // Auto-confirm categories where all fields are resolved
   autoConfirmCategories(spec.filename);
+
+  rewindRecord('acceptField', 'Accept Field', `"${field}" = "${value}" (${source}) on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
 
   // Re-render tabs to update counts
   renderCategoryTabs();
@@ -1634,6 +1680,7 @@ function toggleFlag() {
   const specState = APP.state.specimens[spec.filename];
   if (!specState) return;
 
+  const _rwBefore = rewindCapture([spec.filename], [], { flagged: true });
   specState.flagged = !specState.flagged;
 
   // Update flag button in-place immediately
@@ -1649,10 +1696,12 @@ function toggleFlag() {
     setTimeout(() => {
       const note = prompt('Flag note (optional):');
       specState.flag_note = note || '';
+      rewindRecord('toggleFlag', 'Toggle Flag', `${specState.flagged ? 'Flagged' : 'Unflagged'} ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
       scheduleSaveState();
     }, 50);
   } else {
     specState.flag_note = '';
+    rewindRecord('toggleFlag', 'Toggle Flag', `Unflagged ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
     scheduleSaveState();
   }
 }
@@ -1899,6 +1948,8 @@ function rebuildSpecimenIndexMap() {
 let tableSelectedIndex = 0;
 let tableImageType = 'collage';
 let tableEditingLocked = true;
+let tableSelectedCell = null;   // Currently highlighted td element
+let tableAllFields = [];        // Cached field list for keyboard nav
 let focusThumbSize = 52;
 
 async function renderTableView() {
@@ -1920,6 +1971,8 @@ async function renderTableView() {
     const firstData = tableDataCache[APP.specimens[0].filename];
     if (firstData) allFields = Object.keys(firstData.formatted_json || {});
   }
+  tableAllFields = allFields;
+  tableSelectedCell = null;
 
   el.innerHTML = `
     <div class="review-nav">
@@ -2033,9 +2086,23 @@ async function loadTableImage(index) {
   }
 }
 
+// Schedule a table re-render after an edit finishes, but only if no new edit
+// was immediately started (Enter/Tab start editing the next cell).
+function scheduleTableRerender() {
+  requestAnimationFrame(() => {
+    const tbody = document.getElementById('table-body');
+    if (tbody && !tbody.querySelector('.cell-edit-input')) {
+      renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
+    }
+  });
+}
+
 // Cache prepared table rows to avoid recomputing on scroll
 let _tableRowsCache = null;
 let _tableFilteredCache = null;
+let _tableCurrentFilter = '';
+let _tableCurrentSortCol = 'index';
+let _tableCurrentSortAsc = true;
 
 function prepareTableRows(allFields) {
   if (_tableRowsCache) return _tableRowsCache;
@@ -2080,28 +2147,11 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
   const tbody = document.getElementById('table-body');
   if (!tbody) return;
 
-  _tableRowsCache = null; // always recompute on explicit render
-  const rows = prepareTableRows(allFields);
+  _tableCurrentFilter = filter;
+  _tableCurrentSortCol = sortCol;
+  _tableCurrentSortAsc = sortAsc;
 
-  // Filter
-  const filtered = filter
-    ? rows.filter(r => r.filename.toLowerCase().includes(filter) ||
-        Object.values(r.fieldValues).some(v => v.toLowerCase().includes(filter)))
-    : rows;
-
-  // Sort
-  filtered.sort((a, b) => {
-    let va, vb;
-    if (sortCol === 'index') { va = a.index; vb = b.index; }
-    else if (sortCol === 'filename') { va = a.filename; vb = b.filename; }
-    else if (sortCol === 'status') { va = a.status; vb = b.status; }
-    else { va = a.fieldValues[sortCol] || ''; vb = b.fieldValues[sortCol] || ''; }
-    if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
-    if (va < vb) return sortAsc ? -1 : 1;
-    if (va > vb) return sortAsc ? 1 : -1;
-    return 0;
-  });
-
+  const filtered = filterAndSortTableRows(allFields, filter, sortCol, sortAsc);
   _tableFilteredCache = filtered;
 
   // Virtual scroll: only render visible rows + buffer
@@ -2128,10 +2178,42 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
   renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT);
 }
 
+function filterAndSortTableRows(allFields, filter, sortCol, sortAsc) {
+  _tableRowsCache = null; // always recompute from current APP.state
+  const rows = prepareTableRows(allFields);
+
+  const filtered = filter
+    ? rows.filter(r => r.filename.toLowerCase().includes(filter) ||
+        Object.values(r.fieldValues).some(v => v.toLowerCase().includes(filter)))
+    : [...rows];
+
+  filtered.sort((a, b) => {
+    let va, vb;
+    if (sortCol === 'index') { va = a.index; vb = b.index; }
+    else if (sortCol === 'filename') { va = a.filename; vb = b.filename; }
+    else if (sortCol === 'status') { va = a.status; vb = b.status; }
+    else { va = a.fieldValues[sortCol] || ''; vb = b.fieldValues[sortCol] || ''; }
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+
+  return filtered;
+}
+
 function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
-  if (!filtered) filtered = _tableFilteredCache || [];
   const tbody = document.getElementById('table-body');
   if (!tbody || !wrapper) return;
+
+  // Guard: never destroy the DOM while a cell is being edited
+  if (tbody.querySelector('.cell-edit-input')) return;
+
+  // If no pre-filtered data passed (scroll event), recompute from current state
+  if (!filtered) {
+    filtered = filterAndSortTableRows(allFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
+    _tableFilteredCache = filtered;
+  }
 
   const scrollTop = wrapper.scrollTop;
   const viewHeight = wrapper.clientHeight;
@@ -2175,21 +2257,26 @@ function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
     });
   });
 
-  // Single click: expand cell and start editing immediately
+  // Single click: select cell (when locked) or expand+edit (when unlocked)
   tbody.querySelectorAll('td[data-field]').forEach(td => {
     td.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(td.dataset.index);
       if (idx !== tableSelectedIndex) selectTableRow(idx);
 
-      // Collapse other expanded cells
-      tbody.querySelectorAll('td.expanded').forEach(other => {
-        if (other !== td) other.classList.remove('expanded');
-      });
-      td.classList.add('expanded');
+      if (tableEditingLocked) {
+        // Just select/highlight the cell
+        selectTableCell(td);
+      } else {
+        // Collapse other expanded cells
+        tbody.querySelectorAll('td.expanded').forEach(other => {
+          if (other !== td) other.classList.remove('expanded');
+        });
+        td.classList.add('expanded');
 
-      // Start editing immediately
-      startCellEdit(td, idx, td.dataset.field, allFields);
+        // Start editing immediately
+        startCellEdit(td, idx, td.dataset.field, allFields);
+      }
     });
   });
 
@@ -2209,8 +2296,84 @@ function selectTableRow(index) {
   loadTableImage(index);
 }
 
+function selectTableCell(td) {
+  if (tableSelectedCell) tableSelectedCell.classList.remove('cell-selected');
+  tableSelectedCell = td;
+  td.classList.add('cell-selected');
+
+  // Make the table wrapper focusable so it receives key events
+  const wrapper = document.querySelector('.batch-table-wrapper');
+  if (wrapper && !wrapper.hasAttribute('tabindex')) {
+    wrapper.setAttribute('tabindex', '-1');
+    wrapper.style.outline = 'none';
+  }
+  if (wrapper) wrapper.focus();
+
+  // Scroll cell into view
+  td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// Arrow key navigation for table view (when editing is locked)
+document.addEventListener('keydown', (e) => {
+  if (APP.currentView !== 'table') return;
+  if (!tableEditingLocked) return;
+  if (!tableSelectedCell) return;
+  // Don't intercept if a modal/overlay is open or an input is focused
+  if (document.querySelector('.image-modal-overlay, .rewind-overlay')) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+
+  const { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } = { ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight' };
+  if (![ArrowUp, ArrowDown, ArrowLeft, ArrowRight].includes(e.key)) return;
+
+  e.preventDefault();
+
+  const currentField = tableSelectedCell.dataset.field;
+  const currentIndex = parseInt(tableSelectedCell.dataset.index);
+  let nextField = currentField;
+  let nextIndex = currentIndex;
+
+  if (e.key === ArrowLeft) {
+    const fi = tableAllFields.indexOf(currentField);
+    if (fi > 0) nextField = tableAllFields[fi - 1];
+  } else if (e.key === ArrowRight) {
+    const fi = tableAllFields.indexOf(currentField);
+    if (fi < tableAllFields.length - 1) nextField = tableAllFields[fi + 1];
+  } else if (e.key === ArrowUp) {
+    // Find previous visible row
+    const currentRow = tableSelectedCell.closest('tr');
+    const prevRow = currentRow?.previousElementSibling;
+    if (prevRow && prevRow.dataset.index !== undefined) {
+      nextIndex = parseInt(prevRow.dataset.index);
+    }
+  } else if (e.key === ArrowDown) {
+    // Find next visible row
+    const currentRow = tableSelectedCell.closest('tr');
+    const nextRow = currentRow?.nextElementSibling;
+    if (nextRow && nextRow.dataset.index !== undefined) {
+      nextIndex = parseInt(nextRow.dataset.index);
+    }
+  }
+
+  // Find the target cell
+  const targetTd = document.querySelector(`.batch-table td[data-field="${CSS.escape(nextField)}"][data-index="${nextIndex}"]`);
+  if (targetTd) {
+    // Update row selection + image if row changed
+    if (nextIndex !== currentIndex) {
+      selectTableRow(nextIndex);
+    }
+    selectTableCell(targetTd);
+  }
+});
+
 function toggleTableLock() {
   if (tableEditingLocked) {
+    // Skip warning if disabled in settings
+    if (APP.settings.editLockWarning === false) {
+      tableEditingLocked = false;
+      tableSelectedCell = null;
+      updateTableLockButton();
+      return;
+    }
     // Unlocking — show warning
     const overlay = document.createElement('div');
     overlay.className = 'image-modal-overlay';
@@ -2242,6 +2405,7 @@ function toggleTableLock() {
     document.getElementById('lock-confirm').addEventListener('click', () => {
       overlay.remove();
       tableEditingLocked = false;
+      tableSelectedCell = null;
       updateTableLockButton();
     });
   } else {
@@ -2277,7 +2441,8 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
   const originalFj = cached?.formatted_json || {};
   const specState = APP.state?.specimens?.[spec.filename];
 
-  const currentValue = specState?.accepted_fields?.[fieldName]?.value
+  const currentValue = specState?.unconfirmed_fields?.[fieldName]
+    ?? specState?.accepted_fields?.[fieldName]?.value
     ?? (originalFj[fieldName] !== undefined ? String(originalFj[fieldName]) : '');
 
   const originalText = td.textContent;
@@ -2302,8 +2467,11 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
     const newValue = input.textContent.replace(/\n/g, ' ').trim();
     td.textContent = newValue;
     td.classList.remove('cell-limbo', 'expanded');
+    delete td.dataset.limboValue;
 
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+
+    const _rwBefore = rewindCapture([spec.filename], [fieldName], { categories_confirmed: true });
 
     const aiValue = originalFj[fieldName] !== undefined ? String(originalFj[fieldName]) : '';
     let source;
@@ -2324,8 +2492,10 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
     td.classList.add('cell-accepted');
     td.title = newValue;
     autoConfirmCategories(spec.filename);
+    rewindRecord('cellEdit', 'Cell Edit', `"${fieldName}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
     scheduleSaveState();
     scheduleAutoSaveReviewed(spec.filename);
+    scheduleTableRerender();
   };
 
   const goLimbo = () => {
@@ -2338,11 +2508,14 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
 
     // Persist unconfirmed change to state
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+    const _rwBefore = rewindCapture([spec.filename], [fieldName]);
     if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
       APP.state.specimens[spec.filename].unconfirmed_fields = {};
     }
     APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
+    rewindRecord('cellEdit', 'Cell Edit (limbo)', `"${fieldName}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
     scheduleSaveState();
+    scheduleTableRerender();
   };
 
   const cancel = () => {
@@ -2353,13 +2526,18 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
     delete td.dataset.limboValue;
 
     // Clear unconfirmed state
-    if (APP.state.specimens[spec.filename]?.unconfirmed_fields) {
+    if (APP.state.specimens[spec.filename]?.unconfirmed_fields?.[fieldName] !== undefined) {
+      const _rwBefore = rewindCapture([spec.filename], [fieldName]);
       delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
+      rewindRecord('cellCancel', 'Cancel Edit', `"${fieldName}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
       scheduleSaveState();
     }
+    scheduleTableRerender();
   };
 
-  input.addEventListener('blur', () => {
+  let committed = false;
+  const onBlur = () => {
+    if (committed) return;
     // Only go to limbo if the value was actually changed
     if (input.textContent.replace(/\n/g, ' ').trim() !== currentValue) {
       goLimbo();
@@ -2369,13 +2547,16 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
       td.classList.toggle('cell-accepted', wasAccepted);
       td.classList.toggle('cell-unaccepted', !wasAccepted);
       td.classList.remove('expanded');
+      scheduleTableRerender();
     }
-  });
+  };
+  input.addEventListener('blur', onBlur);
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault(); // Prevent newline in contenteditable
-      input.removeEventListener('blur', goLimbo);
+      committed = true;
+      input.removeEventListener('blur', onBlur);
       commit();
       const nextTd = document.querySelector(`.batch-table td[data-field="${fieldName}"][data-index="${specimenIndex + 1}"]`);
       if (nextTd) {
@@ -2384,7 +2565,8 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
         startCellEdit(nextTd, specimenIndex + 1, fieldName, allFields);
       }
     } else if (e.key === 'Escape') {
-      input.removeEventListener('blur', goLimbo);
+      committed = true;
+      input.removeEventListener('blur', onBlur);
       cancel();
     } else if (e.key === 'Tab') {
       e.preventDefault();
@@ -2618,6 +2800,9 @@ function showConfirmAllPopup(field) {
 }
 
 function confirmAllFieldValues(field) {
+  const allFilenames = APP.specimens.map(s => s.filename);
+  const _rwBefore = rewindCapture(allFilenames, [field], { categories_confirmed: true });
+
   for (const spec of APP.specimens) {
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
     const st = APP.state.specimens[spec.filename];
@@ -2647,12 +2832,16 @@ function confirmAllFieldValues(field) {
     scheduleAutoSaveReviewed(spec.filename);
   }
 
+  rewindRecord('confirmAll', 'Confirm All', `"${field}" across ${APP.specimens.length} specimens`, _rwBefore);
   scheduleSaveState();
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
 }
 
 function confirmModifiedField(field) {
+  const modifiedFilenames = APP.specimens.filter(s => APP.state.specimens[s.filename]?.unconfirmed_fields?.[field] !== undefined).map(s => s.filename);
+  const _rwBefore = rewindCapture(modifiedFilenames, [field], { categories_confirmed: true });
+
   for (const spec of APP.specimens) {
     const st = APP.state.specimens[spec.filename];
     if (st?.unconfirmed_fields?.[field] === undefined) continue; // Only touch limbo entries
@@ -2674,6 +2863,7 @@ function confirmModifiedField(field) {
     scheduleAutoSaveReviewed(spec.filename);
   }
 
+  rewindRecord('confirmModified', 'Confirm Modified', `"${field}" on ${modifiedFilenames.length} specimen${modifiedFilenames.length !== 1 ? 's' : ''}`, _rwBefore);
   scheduleSaveState();
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
@@ -2851,7 +3041,7 @@ function fingerprintCluster(fieldValues) {
 // ── Focus Main Panel ────────────────────────────────────────
 
 // Track which sections are minimized
-const focusSectionState = { values: false, clusters: false, dates: false, catalog: false, specimens: false, standardize: false, authorship: false, elevation: false };
+const focusSectionState = { values: false, clusters: false, dates: false, catalog: false, specimens: false, standardize: false, authorship: false, elevation: false, nameparser: false };
 let focusToolScope = 'field'; // 'field' or 'everything'
 let focusToolCategory = null; // dynamic from editor_tools, null = no tools shown
 
@@ -2863,40 +3053,7 @@ function getEditorToolCategories() {
   const et = APP.currentPrompt?.editor_tools || {};
   const fromPrompt = Object.keys(et).map(k => k.toLowerCase());
   if (fromPrompt.length > 0) return fromPrompt;
-
-  // No editor_tools in prompt — use defaults, but also include any categories with user-added fields
-  const overrides = APP.state?.toolFieldOverrides || {};
-  const withUserFields = Object.keys(overrides).filter(cat =>
-    overrides[cat]?.added?.length > 0
-  );
-  const cats = [...DEFAULT_TOOL_CATEGORIES];
-  for (const c of withUserFields) {
-    if (!cats.includes(c)) cats.push(c);
-  }
-  return cats;
-}
-
-// Get fields for a tool category from editor_tools
-function getEditorToolFields(category) {
-  const et = APP.currentPrompt?.editor_tools || {};
-  let baseFields = [];
-  for (const [k, v] of Object.entries(et)) {
-    if (k.toLowerCase() === category.toLowerCase()) { baseFields = [...(v || [])]; break; }
-  }
-
-  // Apply user overrides from state
-  const overrides = APP.state?.toolFieldOverrides?.[category.toLowerCase()];
-  if (overrides) {
-    if (overrides.added) {
-      for (const f of overrides.added) {
-        if (!baseFields.includes(f)) baseFields.push(f);
-      }
-    }
-    if (overrides.removed) {
-      baseFields = baseFields.filter(f => !overrides.removed.includes(f));
-    }
-  }
-  return baseFields;
+  return [...DEFAULT_TOOL_CATEGORIES];
 }
 
 // Section-to-category mapping — built dynamically
@@ -2943,6 +3100,7 @@ const USA_VARIANTS = ['USA','U.S.A.','U.S.A','US','U.S.','U.S','United States of
 const STANDARDIZE_TOOLS = [
   {
     id: 'genus-title-case',
+    intent: 'Genus',
     label: 'Genus → Title Case',
     categories: ['taxonomy'],
     transform: (v, field) => {
@@ -2952,6 +3110,7 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'epithet-lowercase',
+    intent: 'Specific Epithet',
     label: 'Specific Epithet → lowercase',
     categories: ['taxonomy'],
     transform: (v, field) => {
@@ -2961,7 +3120,8 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'taxon-rank-normalize',
-    label: 'Normalize taxonRank (ssp.→subsp.)',
+    intent: 'Taxon Rank',
+    label: 'Normalize taxon rank (e.g. ssp. → subsp.)',
     categories: ['taxonomy'],
     transform: (v) => {
       if (!v) return null;
@@ -2973,17 +3133,41 @@ const STANDARDIZE_TOOLS = [
     }
   },
   {
+    id: 'variety-normalize',
+    intent: 'Taxon Rank',
+    label: 'Normalize variety (var, var. → var.)',
+    categories: ['taxonomy'],
+    transform: (v) => {
+      if (!v) return null;
+      const fixed = v.replace(/\bvar(?:iety)?\.?\b/gi, 'var.');
+      return fixed !== v ? fixed : null;
+    }
+  },
+  {
+    id: 'forma-normalize',
+    intent: 'Taxon Rank',
+    label: 'Normalize forma (forma, fo. → f.)',
+    categories: ['taxonomy'],
+    transform: (v) => {
+      if (!v) return null;
+      const fixed = v.replace(/\bforma?\b/gi, 'f.').replace(/\bfo\.?\b/gi, 'f.');
+      return fixed !== v ? fixed : null;
+    }
+  },
+  {
     id: 'geo-title-case',
-    label: 'Geography fields → Title Case (ALL-CAPS only)',
+    intent: 'Title Case',
+    label: 'Geography → ALL-CAPS to Title Case',
     categories: ['geography'],
     transform: (v, field) => {
-      if (!/country|state|province|county|continent/i.test(field)) return null;
+      if (!/country|state|province|county|continent|locality|municipality/i.test(field)) return null;
       if (!v || !/^[^a-z]*$/.test(v) || v.length < 2) return null;
       return v.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
     }
   },
   {
     id: 'usa-standardize',
+    intent: 'USA Variants',
     label: 'Standardize "USA" variants → "United States"',
     categories: ['geography'],
     transform: (v, field) => {
@@ -2996,6 +3180,7 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'state-abbrev-expand',
+    intent: 'USA States',
     label: 'US state abbreviations → full names',
     categories: ['geography'],
     transform: (v, field) => {
@@ -3007,6 +3192,7 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'county-suffix-strip',
+    intent: 'USA County',
     label: 'Strip "County" / "Co." suffixes',
     categories: ['geography'],
     transform: (v, field) => {
@@ -3017,8 +3203,69 @@ const STANDARDIZE_TOOLS = [
     }
   },
   {
+    id: 'municipality-suffix-strip',
+    intent: 'Municipality',
+    label: 'Strip "Municipality" suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/county|municipality|admin/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Municipality\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
+    id: 'prefecture-suffix-strip',
+    intent: 'Prefecture',
+    label: 'Strip "Prefecture" suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/county|state|province|prefecture|admin/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Prefecture\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
+    id: 'province-suffix-strip',
+    intent: 'Province',
+    label: 'Strip "Province" / "Prov." suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/state|province|admin/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Prov(?:ince|\.?)?\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
+    id: 'department-suffix-strip',
+    intent: 'Department',
+    label: 'Strip "Department" / "Dept." suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/county|state|province|department|admin/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Dep(?:t|artment|\.?)?\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
+    id: 'district-suffix-strip',
+    intent: 'District',
+    label: 'Strip "District" / "Dist." suffixes',
+    categories: ['geography'],
+    transform: (v, field) => {
+      if (!/county|state|province|district|admin/i.test(field)) return null;
+      if (!v) return null;
+      const stripped = v.replace(/\s+Dist(?:rict|\.?)?\s*$/i, '').trim();
+      return stripped !== v.trim() ? stripped : null;
+    }
+  },
+  {
     id: 'collector-title-case',
-    label: 'Collectors → Title Case (ALL-CAPS only)',
+    intent: 'Names',
+    label: 'Collectors → ALL-CAPS to Title Case',
     categories: ['collectors'],
     transform: (v, field) => {
       if (!/collect|associat/i.test(field)) return null;
@@ -3028,6 +3275,7 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'datum-normalize',
+    intent: 'Datum',
     label: 'Standardize datum → "WGS84"',
     categories: ['coordinates'],
     transform: (v, field) => {
@@ -3039,25 +3287,475 @@ const STANDARDIZE_TOOLS = [
   },
   {
     id: 'cultivated-normalize',
-    label: 'Standardize cultivated (empty or "1")',
+    intent: 'Cultivated',
+    label: 'Standardize cultivated → 0 or 1',
     categories: ['taxonomy'],
     transform: (v, field) => {
       if (!/cultivat/i.test(field)) return null;
-      if (v === '' || v === '1') return null;
-      if (!v || v.trim() === '') return '';
+      if (v === '0' || v === '1') return null;
+      if (!v || v.trim() === '' || /^(no|false|none|n|0)$/i.test(v.trim())) return '0';
+      if (/^(yes|true|y|1|cultivated)$/i.test(v.trim())) return '1';
       return '1';
     }
   }
 ];
 
+// ── Collector Name Parsing Engine ────────────────────────────
+
+const NAME_HONORIFICS = new Set(['dr', 'dr.', 'prof', 'prof.', 'mr', 'mr.', 'mrs', 'mrs.', 'ms', 'ms.', 'rev', 'rev.']);
+const NAME_SUFFIXES = new Set(['jr', 'jr.', 'sr', 'sr.', 'ii', 'iii', 'iv', 'v', 'esq', 'esq.', 'phd', 'ph.d.', 'md', 'm.d.']);
+const LAST_NAME_PREFIXES = ['van der', 'van de', 'van den', 'von der', 'de la', 'de los', 'de las', 'van', 'von', 'de', 'du', 'da', 'del', 'della', 'di', 'le', 'la', 'el', 'al'];
+const ORG_KEYWORDS = /\b(university|museum|garden|institute|herbarium|department|society|foundation|college|laboratory|botanical|academy|bureau|service|survey)\b/i;
+
+const NAME_FORMATS = [
+  { id: 'full',       label: 'Full Name',      example: 'William J. Smith' },
+  { id: 'fm-dot',     label: 'F.M. Last',      example: 'W.J. Smith' },
+  { id: 'fm-nodot',   label: 'FM Last',         example: 'WJ Smith' },
+  { id: 'f-dot',      label: 'F. Last',         example: 'W. Smith' },
+  { id: 'f-nodot',    label: 'F Last',          example: 'W Smith' },
+  { id: 'last-fm',    label: 'Last, F.M.',      example: 'Smith, W.J.' },
+  { id: 'last-first', label: 'Last, First M.',  example: 'Smith, William J.' },
+];
+
+function nameToTitleCase(str) {
+  if (!str) return str;
+  return str.toLowerCase().replace(/(?:^|\s|-)(\S)/g, (m, c, offset, full) => {
+    // Keep lowercase for known prefixes unless at start
+    const word = full.slice(offset).split(/[\s-]/)[0].toLowerCase();
+    if (offset > 0 && LAST_NAME_PREFIXES.includes(word) && word.length <= 3) {
+      return m; // keep lowercase "van", "de", etc.
+    }
+    return m.slice(0, -1) + c.toUpperCase();
+  }).replace(/\bMc(\w)/g, (_, c) => 'Mc' + c.toUpperCase())
+    .replace(/\bMac(\w{3,})/g, (_, rest) => 'Mac' + rest.charAt(0).toUpperCase() + rest.slice(1));
+}
+
+function isInitialToken(token) {
+  const clean = token.replace(/\./g, '');
+  return clean.length <= 2 && /^[A-Za-z]+$/.test(clean);
+}
+
+function isAllCaps(str) {
+  const letters = str.replace(/[^A-Za-z]/g, '');
+  return letters.length > 1 && letters === letters.toUpperCase();
+}
+
+function splitCollectorNames(rawValue, inputInverted) {
+  if (!rawValue || !rawValue.trim()) return { names: [], separator: '' };
+  let val = rawValue.trim();
+
+  // Extract "et al." trailing
+  let etAl = null;
+  const etAlMatch = val.match(/,?\s*(et\s+al\.?)$/i);
+  if (etAlMatch) {
+    etAl = 'et al.';
+    val = val.slice(0, etAlMatch.index).trim();
+  }
+
+  let names, separator;
+
+  // Try semicolons first
+  if (val.includes(';')) {
+    names = val.split(';').map(s => s.trim()).filter(Boolean);
+    separator = '; ';
+  }
+  // Try " and " / " & "
+  else if (/\s+(?:and|&)\s+/i.test(val)) {
+    names = val.split(/\s+(?:and|&)\s+/i).map(s => s.trim()).filter(Boolean);
+    separator = ' & ';
+  }
+  // Commas: if inverted, pair up "Last, First" tokens; otherwise treat as separators
+  else if (val.includes(',')) {
+    const tokens = val.split(',').map(s => s.trim()).filter(Boolean);
+    if (inputInverted) {
+      // Pair consecutive tokens: "Last", "First M." → "Last First M."
+      names = [];
+      for (let i = 0; i < tokens.length; i += 2) {
+        if (tokens[i + 1] !== undefined) {
+          names.push(tokens[i + 1] + ' ' + tokens[i]);
+        } else {
+          names.push(tokens[i]);
+        }
+      }
+      separator = ', ';
+    } else {
+      names = tokens;
+      separator = ', ';
+    }
+  }
+  // Try colons
+  else if (val.includes(':')) {
+    names = val.split(':').map(s => s.trim()).filter(Boolean);
+    separator = ': ';
+  } else {
+    names = [val];
+    separator = '';
+  }
+
+  if (etAl) {
+    names.push(etAl);
+    if (!separator) separator = ' ';
+  }
+  return { names, separator };
+}
+
+function parseName(nameStr) {
+  let raw = nameStr.trim();
+  // Clean OCR artifacts: trailing dots, repeated punctuation
+  raw = raw.replace(/\.{2,}$/g, '').replace(/[,;:]+$/g, '').trim();
+  if (!raw) return { raw: nameStr.trim(), last: null };
+
+  // Handle "et al."
+  if (/^et\s+al\.?$/i.test(raw)) {
+    return { isEtAl: true, raw };
+  }
+
+  // Handle organizations
+  if (ORG_KEYWORDS.test(raw)) {
+    return { isOrganization: true, raw, allCaps: isAllCaps(raw) };
+  }
+
+  let working = raw;
+  const allCaps = isAllCaps(raw);
+
+
+  let tokens = working.split(/\s+/).filter(Boolean);
+
+  // Expand compound initials: "A.S." → ["A.", "S."], "D.J." → ["D.", "J."]
+  tokens = tokens.flatMap(t => {
+    const m = t.match(/^([A-Za-z]\.){2,}$/);
+    if (m) return t.match(/[A-Za-z]\./g);
+    return [t];
+  });
+
+  // Extract honorific
+  let honorific = null;
+  if (tokens.length > 1 && NAME_HONORIFICS.has(tokens[0].toLowerCase())) {
+    honorific = tokens.shift();
+    // Normalize honorific to title case with period
+    honorific = honorific.charAt(0).toUpperCase() + honorific.slice(1).toLowerCase();
+    if (!honorific.endsWith('.')) honorific += '.';
+  }
+
+  // Extract suffix
+  let suffix = null;
+  if (tokens.length > 1 && NAME_SUFFIXES.has(tokens[tokens.length - 1].toLowerCase())) {
+    suffix = tokens.pop();
+    // Normalize suffix
+    const sl = suffix.toLowerCase().replace(/\./g, '');
+    if (['jr', 'sr', 'esq'].includes(sl)) {
+      suffix = sl.charAt(0).toUpperCase() + sl.slice(1) + '.';
+    } else if (['ii', 'iii', 'iv', 'v'].includes(sl)) {
+      suffix = sl.toUpperCase();
+    } else if (['phd', 'md'].includes(sl)) {
+      suffix = sl.toUpperCase().split('').join('.') + '.';
+    }
+  }
+
+  if (tokens.length === 0) return { raw, honorific, suffix, last: null, allCaps };
+
+  // Detect multi-word last name prefix
+  let last = null;
+  if (tokens.length > 1) {
+    const lower = tokens.map(t => t.toLowerCase());
+    for (const prefix of LAST_NAME_PREFIXES) {
+      const parts = prefix.split(' ');
+      const startIdx = tokens.length - parts.length - 1;
+      if (startIdx < 0) continue;
+      const candidate = lower.slice(startIdx, startIdx + parts.length).join(' ');
+      if (candidate === prefix) {
+        const lastParts = tokens.slice(startIdx, startIdx + parts.length + 1);
+        last = lastParts.join(' ');
+        tokens = tokens.slice(0, startIdx);
+        break;
+      }
+    }
+  }
+
+  if (!last && tokens.length > 0) {
+    last = tokens.pop();
+  }
+
+  const first = tokens.length > 0 ? tokens.shift() : null;
+  const middle = tokens; // whatever's left
+
+  // Title-case if ALL-CAPS
+  const tcLast = allCaps && last ? nameToTitleCase(last) : last;
+  const tcFirst = allCaps && first ? nameToTitleCase(first) : first;
+  const tcMiddle = allCaps ? middle.map(m => nameToTitleCase(m)) : [...middle];
+
+  return {
+    raw,
+    honorific,
+    first: tcFirst,
+    middle: tcMiddle,
+    last: tcLast,
+    suffix,
+    firstIsInitial: first ? isInitialToken(first) : false,
+    middleAreInitials: tcMiddle.every(m => isInitialToken(m)),
+    allCaps
+  };
+}
+
+function toInitial(name, withDot) {
+  if (!name) return '';
+  const c = name.replace(/\./g, '').charAt(0).toUpperCase();
+  return withDot ? c + '.' : c;
+}
+
+function formatName(parsed, formatId, options) {
+  if (!parsed) return '';
+  if (parsed.isEtAl) return 'et al.';
+  if (parsed.isOrganization) return parsed.allCaps ? nameToTitleCase(parsed.raw) : parsed.raw;
+  if (!parsed.last) return parsed.raw;
+
+  const hon = (options.honorifics === 'keep' && parsed.honorific) ? parsed.honorific + ' ' : '';
+  const suf = (options.suffixes === 'keep' && parsed.suffix) ? ' ' + parsed.suffix : '';
+  const first = parsed.first;
+  const middles = parsed.middle || [];
+  const last = parsed.last;
+
+  // Build first/middle portions per format
+  let result;
+  switch (formatId) {
+    case 'full': {
+      // Use full names where known, initials with dots where only initials exist
+      const f = first ? (parsed.firstIsInitial ? toInitial(first, true) : first) : '';
+      const m = middles.map(mi => isInitialToken(mi) ? toInitial(mi, true) : mi).join(' ');
+      result = hon + [f, m, last].filter(Boolean).join(' ') + suf;
+      break;
+    }
+    case 'fm-dot': {
+      const f = first ? toInitial(first, true) : '';
+      const m = middles.map(mi => toInitial(mi, true)).join('');
+      result = hon + [f + m, last].filter(Boolean).join(' ') + suf;
+      break;
+    }
+    case 'fm-nodot': {
+      const f = first ? toInitial(first, false) : '';
+      const m = middles.map(mi => toInitial(mi, false)).join('');
+      result = hon + [f + m, last].filter(Boolean).join(' ') + suf;
+      break;
+    }
+    case 'f-dot': {
+      const f = first ? toInitial(first, true) : '';
+      result = hon + [f, last].filter(Boolean).join(' ') + suf;
+      break;
+    }
+    case 'f-nodot': {
+      const f = first ? toInitial(first, false) : '';
+      result = hon + [f, last].filter(Boolean).join(' ') + suf;
+      break;
+    }
+    case 'last-fm': {
+      const f = first ? toInitial(first, true) : '';
+      const m = middles.map(mi => toInitial(mi, true)).join('');
+      const initials = f + m;
+      result = initials ? last + ', ' + hon + initials + suf : hon + last + suf;
+      break;
+    }
+    case 'last-first': {
+      const f = first ? (parsed.firstIsInitial ? toInitial(first, true) : first) : '';
+      const m = middles.map(mi => toInitial(mi, true)).join(' ');
+      const rest = [f, m].filter(Boolean).join(' ');
+      result = rest ? last + ', ' + hon + rest + suf : hon + last + suf;
+      break;
+    }
+    default:
+      result = parsed.raw;
+  }
+
+  return result.replace(/\s{2,}/g, ' ').trim();
+}
+
+function transformCollectorField(rawValue, formatId, options) {
+  const { names, separator } = splitCollectorNames(rawValue, options.inputInverted);
+  if (names.length === 0) return rawValue;
+
+  const formatted = names.map(name => {
+    const parsed = parseName(name);
+    const result = formatName(parsed, formatId, options);
+    // If the name already matches the target format, keep original to avoid lossy re-parsing
+    const normOrig = name.trim().replace(/\s+/g, ' ');
+    const normResult = result.replace(/\s+/g, ' ');
+    return normOrig === normResult ? name.trim() : result;
+  });
+
+  const output = formatted.join(separator);
+  // Final safeguard: if the full output matches the input, return the original unchanged
+  return output === rawValue.trim() ? rawValue : output;
+}
+
+// ── Collector Name Parser Popup ──────────────────────────────
+
+function showCollectorNamePopup() {
+  const field = focusField;
+  if (!field) return;
+
+  // Gather all specimen values
+  const rows = [];
+  for (const spec of APP.specimens) {
+    const val = getCurrentFieldValue(spec, field);
+    if (!val || !val.trim()) continue;
+    const idx = specimenIndexMap.get(spec.filename);
+    rows.push({ filename: spec.filename, index: idx, oldVal: val });
+  }
+  if (rows.length === 0) { alert('No values to parse for this field.'); return; }
+
+  let currentFormat = 'fm-dot';
+  let currentOptions = { honorifics: 'remove', suffixes: 'keep', inputInverted: false };
+  const checkStates = new Map(); // filename -> boolean
+
+  function computePreview() {
+    return rows.map(r => {
+      const newVal = transformCollectorField(r.oldVal, currentFormat, currentOptions);
+      const hasChange = newVal !== r.oldVal;
+      if (!checkStates.has(r.filename)) checkStates.set(r.filename, hasChange);
+      return { ...r, newVal, hasChange };
+    });
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+
+  overlay.innerHTML = `
+    <div class="name-parser-popup" onclick="event.stopPropagation()">
+      <div class="name-parser-header">
+        <span>Collector Name Standardization</span>
+        <button class="name-parser-close" id="np-close">&times;</button>
+      </div>
+      <div class="name-parser-options">
+        <label>Format
+          <select id="np-format">
+            ${NAME_FORMATS.map(f => `<option value="${f.id}" ${f.id === currentFormat ? 'selected' : ''}>${escapeHtml(f.label)} (${escapeHtml(f.example)})</option>`).join('')}
+          </select>
+        </label>
+        <label>Honorifics
+          <select id="np-honorifics">
+            <option value="remove" selected>Remove</option>
+            <option value="keep">Keep</option>
+          </select>
+        </label>
+        <label>Suffixes
+          <select id="np-suffixes">
+            <option value="keep" selected>Keep</option>
+            <option value="remove">Remove</option>
+          </select>
+        </label>
+        <label style="margin-left:auto;cursor:pointer">
+          <input type="checkbox" id="np-inverted" style="accent-color:var(--accent);cursor:pointer">
+          Input is Last, First
+        </label>
+      </div>
+      <div class="name-parser-summary">
+        <span id="np-count"></span>
+        <button class="btn-sm btn-primary" id="np-accept">Accept Selected</button>
+      </div>
+      <div class="name-parser-list" id="np-list"></div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  function renderList() {
+    const preview = computePreview();
+    const changeCount = preview.filter(r => r.hasChange).length;
+    document.getElementById('np-count').textContent = changeCount > 0
+      ? `${changeCount} change${changeCount !== 1 ? 's' : ''} found`
+      : 'No changes for this format';
+
+    const listEl = document.getElementById('np-list');
+    listEl.innerHTML = preview.map(r => {
+      const checked = checkStates.get(r.filename);
+      // Split names for multi-line display
+      const { names: oldNames, separator: oldSep } = splitCollectorNames(r.oldVal, currentOptions.inputInverted);
+      const newNames = r.hasChange ? splitCollectorNames(r.newVal, false).names : [];
+      const sepLabel = oldSep.trim() || ',';
+
+      const formatNameLines = (names, cls) => names.map(n => `<div class="${cls}">${escapeHtml(n)}</div>`).join('');
+
+      return `
+        <div class="name-parser-row ${r.hasChange ? '' : 'no-change'}">
+          <input type="checkbox" data-file="${escapeAttr(r.filename)}" ${checked ? 'checked' : ''} ${!r.hasChange ? 'disabled' : ''}>
+          <span class="np-filename" title="${escapeAttr(r.filename)}">${escapeHtml(r.filename.replace(/\.[^.]+$/, '').slice(0, 24))}</span>
+          <div class="np-names-col np-old">${formatNameLines(oldNames, 'np-name-line')}</div>
+          ${r.hasChange ? `<span class="np-arrow">&rarr;</span><div class="np-names-col np-new">${formatNameLines(newNames, 'np-name-line')}</div>` : ''}
+          ${oldNames.length > 1 ? `<span class="np-sep-hint">joined by "${escapeHtml(sepLabel)}"</span>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    // Wire checkboxes
+    listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        checkStates.set(cb.dataset.file, cb.checked);
+      });
+    });
+  }
+
+  renderList();
+
+  // Dropdown changes
+  document.getElementById('np-format').addEventListener('change', (e) => {
+    currentFormat = e.target.value;
+    // Reset check states for re-evaluation
+    checkStates.clear();
+    renderList();
+  });
+  document.getElementById('np-honorifics').addEventListener('change', (e) => {
+    currentOptions.honorifics = e.target.value;
+    checkStates.clear();
+    renderList();
+  });
+  document.getElementById('np-suffixes').addEventListener('change', (e) => {
+    currentOptions.suffixes = e.target.value;
+    checkStates.clear();
+    renderList();
+  });
+  document.getElementById('np-inverted').addEventListener('change', (e) => {
+    currentOptions.inputInverted = e.target.checked;
+    checkStates.clear();
+    renderList();
+  });
+
+  // Close
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', close);
+  document.getElementById('np-close').addEventListener('click', close);
+
+  // Accept selected
+  document.getElementById('np-accept').addEventListener('click', () => {
+    const preview = computePreview();
+    const accepted = preview.filter(r => r.hasChange && checkStates.get(r.filename));
+    if (accepted.length === 0) { overlay.remove(); return; }
+
+    const affectedFilenames = accepted.map(r => APP.specimens[r.index].filename);
+    const _rwBefore = rewindCapture(affectedFilenames, [field]);
+
+    for (const r of accepted) {
+      const spec = APP.specimens[r.index];
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields)
+        APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      APP.state.specimens[spec.filename].unconfirmed_fields[field] = r.newVal;
+      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+    }
+
+    rewindRecord('nameParser', 'Name Parser', `${currentFormat} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`, _rwBefore);
+    scheduleSaveState();
+    overlay.remove();
+    renderFocusSidebar(getFocusCategories());
+    renderFocusMain();
+  });
+}
+
 // ── Standardization Preview + Apply Engine ──────────────────
 
 function getStandardizePreview(tool) {
   const results = [];
-  // Use editor_tools fields for the active category, fall back to all fields
-  const etFields = getEditorToolFields(focusToolCategory);
-  const first = APP.specimens[0] ? tableDataCache[APP.specimens[0].filename] : null;
-  const allFields = etFields.length > 0 ? etFields : (first ? Object.keys(first.formatted_json || {}) : []);
+  // Operate on the currently selected field
+  const allFields = focusField ? [focusField] : [];
 
   for (const spec of APP.specimens) {
     for (const field of allFields) {
@@ -3076,6 +3774,11 @@ function getStandardizePreview(tool) {
 function applyStandardizeTool(tool) {
   const preview = getStandardizePreview(tool);
   if (preview.length === 0) return 0;
+
+  const affectedFilenames = [...new Set(preview.map(p => APP.specimens[p.index].filename))];
+  const affectedFields = [...new Set(preview.map(p => p.field))];
+  const _rwBefore = rewindCapture(affectedFilenames, affectedFields);
+
   for (const item of preview) {
     const spec = APP.specimens[item.index];
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
@@ -3083,6 +3786,8 @@ function applyStandardizeTool(tool) {
     APP.state.specimens[spec.filename].unconfirmed_fields[item.field] = item.newVal;
     APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
   }
+
+  rewindRecord('standardize', 'Standardize', `${tool.label} (${preview.length} change${preview.length !== 1 ? 's' : ''})`, _rwBefore);
   scheduleSaveState();
   return preview.length;
 }
@@ -3107,7 +3812,7 @@ function renderStandardizeSection() {
     return `
       <div class="std-tool" data-tool-id="${tool.id}">
         <div class="std-tool-header">
-          <span class="std-tool-label">${escapeHtml(tool.label)}</span>
+          ${tool.intent ? `<span class="std-tool-intent">${escapeHtml(tool.intent)}</span>` : ''}<span class="std-tool-label">${escapeHtml(tool.label)}</span>
           <span class="std-tool-fields">${[...new Set(preview.map(p => p.field))].map(f => escapeHtml(f)).join(', ')}</span>
           <span class="std-tool-count ${count > 0 ? 'has-changes' : ''}">${count > 0 ? count + ' affected' : 'no changes'}</span>
           <button class="btn-sm btn-primary std-tool-apply" data-tool-id="${tool.id}" ${count === 0 ? 'disabled' : ''}>Apply</button>
@@ -3203,55 +3908,204 @@ function renderAuthorshipSection() {
   if (focusToolCategory !== 'taxonomy') { container.innerHTML = ''; return; }
 
   const detections = detectAuthorship();
-
-  if (detections.length === 0) {
-    container.innerHTML = '<div class="focus-no-clusters">No authorship strings detected in scientificName</div>';
-    return;
-  }
+  const count = detections.length;
 
   container.innerHTML = `
-    <div style="padding:6px 12px;font-size:11px;color:var(--text-secondary)">${detections.length} specimen(s) with potential authorship in scientificName</div>
-    ${detections.map(d => `
-      <div class="std-preview-row focus-clickable-row" data-index="${d.index}">
-        <span class="spec-filename" style="min-width:100px">${escapeHtml(d.filename.replace(/\.[^.]+$/, '').slice(0, 20))}</span>
-        <span class="std-old-val">${escapeHtml(d.original)}</span>
-        <span style="color:var(--text-muted)">→</span>
-        <span class="std-new-val">${escapeHtml(d.cleanName)}</span>
-        <span style="color:var(--text-muted)">+</span>
-        <span style="font-family:var(--font-mono);font-size:10px;color:var(--cat-1)">${escapeHtml(d.authorship)}</span>
+    <div style="padding:12px">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+        Detect and split authorship strings from scientificName into a separate field.
+        ${count > 0 ? `<span style="color:var(--cat-1)">${count} specimen(s) with potential authorship detected.</span>` : 'No authorship strings detected.'}
       </div>
-    `).join('')}
-    <div style="padding:8px 12px">
-      <button class="btn-sm btn-primary" id="authorship-apply-all" ${detections.length === 0 ? 'disabled' : ''}>Split All (${detections.length})</button>
+      <button class="btn-sm btn-primary" id="btn-open-authorship" ${count === 0 ? 'disabled' : ''}>Open Authorship Splitter</button>
     </div>
   `;
 
-  // Wire row clicks
-  container.querySelectorAll('.focus-clickable-row').forEach(row => {
-    row.addEventListener('click', () => loadFocusImage(parseInt(row.dataset.index)));
+  document.getElementById('btn-open-authorship')?.addEventListener('click', showAuthorshipPopup);
+}
+
+function showAuthorshipPopup() {
+  const detections = detectAuthorship();
+  if (detections.length === 0) { alert('No authorship strings detected.'); return; }
+
+  const first = APP.specimens[0] ? tableDataCache[APP.specimens[0].filename] : null;
+  const allFields = first ? Object.keys(first.formatted_json || {}) : [];
+  const defaultDest = allFields.includes('scientificNameAuthorship') ? 'scientificNameAuthorship' : (allFields[0] || '');
+
+  let mode = 'move'; // 'remove' or 'move'
+  let destField = defaultDest;
+  const checkStates = new Map();
+
+  function computeRows() {
+    return detections.map(d => {
+      const spec = APP.specimens[d.index];
+      const newSciName = d.cleanName;
+      const sciWouldChange = d.original !== newSciName;
+      let existingDest = '', destWouldChange = false;
+      if (mode === 'move' && destField) {
+        existingDest = getCurrentFieldValue(spec, destField);
+        destWouldChange = existingDest !== d.authorship;
+      }
+      const hasChange = sciWouldChange || destWouldChange;
+      if (!checkStates.has(d.filename)) checkStates.set(d.filename, hasChange);
+      return { ...d, newSciName, existingDest, destWouldChange, sciWouldChange, hasChange };
+    });
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+
+  overlay.innerHTML = `
+    <div class="auth-popup" onclick="event.stopPropagation()">
+      <div class="name-parser-header">
+        <span>Authorship Splitter</span>
+        <button class="name-parser-close" id="auth-close">&times;</button>
+      </div>
+
+      <div class="auth-mode-bar">
+        <label class="auth-mode-option">
+          <input type="radio" name="auth-mode" value="remove"> Remove authorship from <strong>scientificName</strong>
+        </label>
+        <label class="auth-mode-option">
+          <input type="radio" name="auth-mode" value="move" checked> Move authorship to
+          <select id="auth-dest-field">
+            ${allFields.map(f => `<option value="${escapeAttr(f)}" ${f === destField ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+
+      <div class="auth-table-header" id="auth-table-header">
+        <span class="auth-col-check"></span>
+        <span class="auth-col-file">Specimen</span>
+        <span class="auth-col-orig">scientificName (current)</span>
+        <span class="auth-col-arrow"></span>
+        <span class="auth-col-new">scientificName (after)</span>
+        <span class="auth-col-split">Authorship</span>
+        <span class="auth-col-dest" id="auth-col-dest-header">${escapeHtml(destField)} (current)</span>
+        <span class="auth-col-arrow"></span>
+        <span class="auth-col-dest" id="auth-col-dest-after">${escapeHtml(destField)} (after)</span>
+      </div>
+
+      <div class="name-parser-summary">
+        <span id="auth-count"></span>
+        <button class="btn-sm btn-primary" id="auth-accept">Accept Selected</button>
+      </div>
+      <div class="name-parser-list" id="auth-list"></div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  function updateHeaderVisibility() {
+    const destCols = overlay.querySelectorAll('.auth-col-dest, .auth-col-dest-arrow');
+    const show = mode === 'move' && destField;
+    destCols.forEach(el => el.style.display = show ? '' : 'none');
+    // Update header text
+    if (show) {
+      document.getElementById('auth-col-dest-header').textContent = destField + ' (current)';
+      document.getElementById('auth-col-dest-after').textContent = destField + ' (after)';
+    }
+  }
+
+  function renderList() {
+    const rows = computeRows();
+    const changeCount = rows.filter(r => r.hasChange).length;
+    document.getElementById('auth-count').textContent = changeCount > 0
+      ? `${changeCount} change${changeCount !== 1 ? 's' : ''}`
+      : 'No changes needed';
+
+    const showDest = mode === 'move' && destField;
+
+    const listEl = document.getElementById('auth-list');
+    listEl.innerHTML = rows.map(r => {
+      const checked = checkStates.get(r.filename);
+      return `
+        <div class="auth-table-row ${r.hasChange ? '' : 'no-change'}">
+          <span class="auth-col-check"><input type="checkbox" data-file="${escapeAttr(r.filename)}" ${checked ? 'checked' : ''} ${!r.hasChange ? 'disabled' : ''}></span>
+          <span class="auth-col-file" title="${escapeAttr(r.filename)}">${escapeHtml(r.filename.replace(/\.[^.]+$/, '').slice(0, 20))}</span>
+          <span class="auth-col-orig ${r.sciWouldChange ? 'auth-val-old' : ''}" title="${escapeAttr(r.original)}">${escapeHtml(r.original)}</span>
+          <span class="auth-col-arrow">${r.sciWouldChange ? '&rarr;' : ''}</span>
+          <span class="auth-col-new ${r.sciWouldChange ? 'auth-val-new' : ''}">${r.sciWouldChange ? escapeHtml(r.newSciName) : '<span class="auth-no-change">no change</span>'}</span>
+          <span class="auth-col-split">${escapeHtml(r.authorship)}</span>
+          <span class="auth-col-dest" style="${showDest ? '' : 'display:none'}" title="${escapeAttr(r.existingDest)}">${r.existingDest ? escapeHtml(r.existingDest) : '<em class="auth-empty">empty</em>'}</span>
+          <span class="auth-col-arrow auth-col-dest-arrow" style="${showDest ? '' : 'display:none'}">${r.destWouldChange ? '&rarr;' : ''}</span>
+          <span class="auth-col-dest" style="${showDest ? '' : 'display:none'}">${r.destWouldChange ? `<span class="auth-val-dest">${escapeHtml(r.authorship)}</span>` : '<span class="auth-no-change">no change</span>'}</span>
+        </div>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', () => checkStates.set(cb.dataset.file, cb.checked));
+    });
+
+    updateHeaderVisibility();
+  }
+
+  renderList();
+
+  // Mode toggle
+  overlay.querySelectorAll('input[name="auth-mode"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      mode = radio.value;
+      const sel = document.getElementById('auth-dest-field');
+      sel.style.opacity = mode === 'move' ? '1' : '0.3';
+      sel.style.pointerEvents = mode === 'move' ? '' : 'none';
+      checkStates.clear();
+      renderList();
+    });
   });
 
-  // Wire apply button
-  document.getElementById('authorship-apply-all')?.addEventListener('click', () => {
-    for (const d of detections) {
-      const spec = APP.specimens[d.index];
+  // Destination field change
+  document.getElementById('auth-dest-field').addEventListener('change', (e) => {
+    destField = e.target.value;
+    checkStates.clear();
+    renderList();
+  });
+
+  // Close
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', close);
+  document.getElementById('auth-close').addEventListener('click', close);
+
+  // Accept selected
+  document.getElementById('auth-accept').addEventListener('click', () => {
+    const rows = computeRows();
+    const accepted = rows.filter(r => r.hasChange && checkStates.get(r.filename));
+    if (accepted.length === 0) { overlay.remove(); return; }
+
+    // Determine which fields will be touched
+    const affectedFields = ['scientificName'];
+    if (mode === 'move' && destField) affectedFields.push(destField);
+    const affectedFilenames = accepted.map(r => APP.specimens[r.index].filename);
+    const _rwBefore = rewindCapture(affectedFilenames, affectedFields);
+
+    for (const r of accepted) {
+      const spec = APP.specimens[r.index];
       if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-      APP.state.specimens[spec.filename].unconfirmed_fields['scientificName'] = d.cleanName;
-      APP.state.specimens[spec.filename].unconfirmed_fields['scientificNameAuthorship'] = d.authorship;
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields)
+        APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      if (r.sciWouldChange) {
+        APP.state.specimens[spec.filename].unconfirmed_fields['scientificName'] = r.newSciName;
+      }
+      if (mode === 'move' && destField && r.destWouldChange) {
+        APP.state.specimens[spec.filename].unconfirmed_fields[destField] = r.authorship;
+      }
       APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
     }
+
+    rewindRecord('authorshipSplit', 'Authorship Split', `${mode} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`, _rwBefore);
     scheduleSaveState();
-    renderFocusMain();
+    overlay.remove();
     renderFocusSidebar(getFocusCategories());
-    alert(`Split authorship for ${detections.length} specimen(s)`);
+    renderFocusMain();
   });
 }
 
 // ── Elevation Discrepancy Tool ───────────────────────────────
 
 function analyzeElevationDiscrepancy() {
-  const elevFields = getEditorToolFields('elevation');
+  // Use the currently selected field for elevation analysis
+  const elevFields = focusField ? [focusField] : [];
   if (elevFields.length === 0) return [];
 
   const results = [];
@@ -3392,156 +4246,6 @@ function renderElevationDiscrepancySection() {
   });
 }
 
-function updateSidebarFieldColors() {
-  const activeFields = focusToolCategory ? new Set(getEditorToolFields(focusToolCategory)) : new Set();
-  document.querySelectorAll('.focus-field-name').forEach(el => {
-    const field = el.closest('.focus-field-item')?.dataset.field;
-    el.classList.toggle('tool-active-field', field && activeFields.has(field));
-  });
-}
-
-function renderToolFieldToggle() {
-  const bar = document.getElementById('focus-tool-field-bar');
-  if (!bar) return;
-
-  if (!focusToolCategory) {
-    bar.innerHTML = '';
-    return;
-  }
-
-  const fields = getEditorToolFields(focusToolCategory);
-
-  // Show add button even when no fields exist
-  if (fields.length === 0) {
-    bar.innerHTML = `
-      <button class="btn-sm focus-field-add-btn" id="focus-field-add" title="Add a field to this tool">+</button>
-      <span style="font-size:11px;color:var(--text-muted)">No fields assigned — click + to add</span>
-    `;
-    document.getElementById('focus-field-add')?.addEventListener('click', () => {
-      showAddFieldPopup(focusToolCategory, fields);
-    });
-    return;
-  }
-
-  // If current field isn't in this tool's fields, select the first one
-  const activeField = fields.includes(focusField) ? focusField : fields[0];
-  if (activeField !== focusField) {
-    focusField = activeField;
-    focusFilter = null;
-  }
-
-  const sw = createSlideSwitch('focus-tool-field-switch', fields.map(f => ({
-    value: f,
-    label: f
-  })), activeField, (val) => {
-    focusField = val;
-    focusFilter = null;
-    // Update sidebar selection
-    const sidebar = document.getElementById('focus-sidebar');
-    if (sidebar) {
-      sidebar.querySelectorAll('.focus-field-item').forEach(i => {
-        i.classList.toggle('active', i.dataset.field === val);
-      });
-    }
-    renderFocusMain();
-  });
-
-  bar.innerHTML = `
-    <button class="btn-sm focus-field-add-btn" id="focus-field-add" title="Add a field to this tool">+</button>
-    ${sw.html}
-    <button class="btn-sm focus-field-remove-btn" id="focus-field-remove" title="Remove selected field from this tool">&minus;</button>
-  `;
-  sw.setup();
-
-  // Style the toggle with blue theme
-  const switchEl = bar.querySelector('.slide-switch');
-  if (switchEl) switchEl.classList.add('slide-switch-blue');
-
-  // Add field button
-  document.getElementById('focus-field-add')?.addEventListener('click', () => {
-    showAddFieldPopup(focusToolCategory, fields);
-  });
-
-  // Remove field button
-  document.getElementById('focus-field-remove')?.addEventListener('click', () => {
-    if (!focusField || !focusToolCategory) return;
-    if (!fields.includes(focusField)) return;
-    if (!APP.state.toolFieldOverrides) APP.state.toolFieldOverrides = {};
-    const cat = focusToolCategory.toLowerCase();
-    if (!APP.state.toolFieldOverrides[cat]) APP.state.toolFieldOverrides[cat] = {};
-    if (!APP.state.toolFieldOverrides[cat].removed) APP.state.toolFieldOverrides[cat].removed = [];
-    if (!APP.state.toolFieldOverrides[cat].removed.includes(focusField)) {
-      APP.state.toolFieldOverrides[cat].removed.push(focusField);
-    }
-    // Also remove from added if it was user-added
-    if (APP.state.toolFieldOverrides[cat].added) {
-      APP.state.toolFieldOverrides[cat].added = APP.state.toolFieldOverrides[cat].added.filter(f => f !== focusField);
-    }
-    scheduleSaveState();
-    focusField = null;
-    renderFocusSidebar(getFocusCategories());
-    renderFocusMain();
-  });
-}
-
-function showAddFieldPopup(category, currentFields) {
-  // Get all available fields
-  const first = APP.specimens[0] ? tableDataCache[APP.specimens[0].filename] : null;
-  const allFields = first ? Object.keys(first.formatted_json || {}) : [];
-  const available = allFields.filter(f => !currentFields.includes(f));
-
-  if (available.length === 0) {
-    alert('All fields are already assigned to this tool.');
-    return;
-  }
-
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-  overlay.innerHTML = `
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;max-width:350px;max-height:70vh;display:flex;flex-direction:column;cursor:default" onclick="event.stopPropagation()">
-      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px">Add field to ${escapeHtml(category)}</div>
-      <div style="overflow-y:auto;flex:1">
-        ${available.map(f => `
-          <div class="add-field-option" data-field="${escapeAttr(f)}" style="padding:6px 12px;cursor:pointer;font-size:12px;font-family:var(--font-mono);color:var(--cat-0);border-radius:var(--radius-sm)">
-            ${escapeHtml(f)}
-          </div>
-        `).join('')}
-      </div>
-      <div style="margin-top:10px;text-align:right">
-        <button class="btn-sm" id="add-field-cancel">Cancel</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.getElementById('add-field-cancel').addEventListener('click', () => overlay.remove());
-
-  overlay.querySelectorAll('.add-field-option').forEach(opt => {
-    opt.addEventListener('mouseenter', () => { opt.style.background = 'var(--bg-hover)'; });
-    opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-    opt.addEventListener('click', () => {
-      const field = opt.dataset.field;
-      if (!APP.state.toolFieldOverrides) APP.state.toolFieldOverrides = {};
-      const cat = category.toLowerCase();
-      if (!APP.state.toolFieldOverrides[cat]) APP.state.toolFieldOverrides[cat] = {};
-      if (!APP.state.toolFieldOverrides[cat].added) APP.state.toolFieldOverrides[cat].added = [];
-      if (!APP.state.toolFieldOverrides[cat].added.includes(field)) {
-        APP.state.toolFieldOverrides[cat].added.push(field);
-      }
-      // Remove from removed list if it was there
-      if (APP.state.toolFieldOverrides[cat].removed) {
-        APP.state.toolFieldOverrides[cat].removed = APP.state.toolFieldOverrides[cat].removed.filter(f => f !== field);
-      }
-      scheduleSaveState();
-      overlay.remove();
-      focusField = field;
-      renderFocusSidebar(getFocusCategories());
-      renderFocusMain();
-    });
-  });
-}
 
 function applyFocusToolCategory(container) {
   const cat = focusToolCategory;
@@ -3576,15 +4280,6 @@ function renderFocusMain() {
   if (!el || !focusField) {
     if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Select a field from the sidebar</div>';
     return;
-  }
-
-  // Auto-select first field for active tool category if needed
-  if (focusToolCategory) {
-    const toolFields = getEditorToolFields(focusToolCategory);
-    if (toolFields.length > 0 && !toolFields.includes(focusField)) {
-      focusField = toolFields[0];
-      focusFilter = null;
-    }
   }
 
   const fieldValues = getAllValuesForField(focusField);
@@ -3685,8 +4380,6 @@ function renderFocusMain() {
       <div class="focus-tool-category-bar">
         <div id="focus-tool-category-switch-container"></div>
       </div>
-      <div class="focus-tool-field-bar" id="focus-tool-field-bar"></div>
-
       <div class="focus-tool-sections" id="focus-tool-sections">
       <div class="focus-row focus-tool-row" id="focus-row-1" data-tool-cats="cluster">
       ${section('clusters', 'Clusters', clusters.length > 0 ? ` &middot; <span style="color:var(--warning)">${clusters.length}</span>` : '', `
@@ -3739,6 +4432,17 @@ function renderFocusMain() {
       <div class="focus-row focus-tool-row" id="focus-row-std" data-tool-cats="taxonomy,geography,collectors,coordinates">
       ${fixedSection('standardize', 'Standardization Tools', '', `
         <div id="focus-standardize-list"></div>
+      `)}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-nameparser" data-tool-cats="collectors">
+      ${fixedSection('nameparser', 'Name Parser', '', `
+        <div style="padding:12px">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+            Parse and standardize collector names across all specimens for the selected field.
+          </div>
+          <button class="btn-sm btn-primary" id="btn-open-name-parser">Open Name Parser</button>
+        </div>
       `)}
       </div>
 
@@ -3907,18 +4611,10 @@ function renderFocusMain() {
   }));
   const catSw = createSlideSwitch('focus-tool-category-switch', catOptions, focusToolCategory || '', (val) => {
     if (val === prevCat) {
-      // Clicking the already-active option deselects
       focusToolCategory = null;
     } else {
       focusToolCategory = val;
-      // Auto-select first field for this tool category
-      const fields = getEditorToolFields(val);
-      if (fields.length > 0 && !fields.includes(focusField)) {
-        focusField = fields[0];
-        focusFilter = null;
-      }
     }
-    renderFocusSidebar(getFocusCategories());
     renderFocusMain();
   });
   const catContainer = document.getElementById('focus-tool-category-switch-container');
@@ -3926,12 +4622,6 @@ function renderFocusMain() {
     catContainer.innerHTML = catSw.html;
     catSw.setup();
   }
-
-  // Field toggle for selected tool category
-  renderToolFieldToggle();
-
-  // Update sidebar field name colors based on active tool
-  updateSidebarFieldColors();
 
   // Wire all clickable specimen rows — click row for image, click value to edit
   el.querySelectorAll('.focus-clickable-row').forEach(row => {
@@ -3951,6 +4641,7 @@ function renderFocusMain() {
 
   renderFocusSpecimens(fieldValues);
   renderStandardizeSection();
+  document.getElementById('btn-open-name-parser')?.addEventListener('click', showCollectorNamePopup);
   renderAuthorshipSection();
   renderElevationDiscrepancySection();
   initFocusElevCalc();
@@ -4093,6 +4784,7 @@ function renderFocusSpecimens(cachedFieldValues) {
       const spec = APP.specimens[idx];
       const st = APP.state.specimens[spec.filename];
       if (!st) return;
+      const _rwBefore = rewindCapture([spec.filename], [], { flagged: true });
       st.flagged = !st.flagged;
       // Update icon immediately
       btn.classList.toggle('flagged', st.flagged);
@@ -4104,10 +4796,12 @@ function renderFocusSpecimens(cachedFieldValues) {
         setTimeout(() => {
           const note = prompt('Flag note (optional):');
           st.flag_note = note || '';
+          rewindRecord('toggleFlag', 'Toggle Flag', `Flagged ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
           scheduleSaveState();
         }, 50);
       } else {
         st.flag_note = '';
+        rewindRecord('toggleFlag', 'Toggle Flag', `Unflagged ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
         scheduleSaveState();
       }
     });
@@ -4283,11 +4977,13 @@ function startFocusCellEdit(cell, specimenIndex, fieldName) {
     // Enter always marks as unconfirmed; blur only if value changed
     if (force || newValue !== currentValue) {
       if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      const _rwBefore = rewindCapture([spec.filename], [fieldName]);
       if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
         APP.state.specimens[spec.filename].unconfirmed_fields = {};
       }
       APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
       APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+      rewindRecord('focusCellEdit', 'Cell Edit', `"${fieldName}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
       scheduleSaveState();
     }
 
@@ -4314,6 +5010,24 @@ function startFocusCellEdit(cell, specimenIndex, fieldName) {
 function mergeCluster(cluster, mergeValue) {
   const valuesToMerge = new Set(cluster.variants.map(v => v.value));
 
+  // Identify affected specimens before mutation
+  const affectedFilenames = [];
+  for (const spec of APP.specimens) {
+    const cached = tableDataCache[spec.filename];
+    const fj = cached?.formatted_json || {};
+    const specState = APP.state.specimens[spec.filename];
+    let currentVal;
+    if (specState?.accepted_fields?.[focusField] !== undefined) {
+      currentVal = specState.accepted_fields[focusField].value;
+    } else {
+      currentVal = fj[focusField] !== undefined ? String(fj[focusField]) : '';
+    }
+    if (valuesToMerge.has(currentVal) && currentVal !== mergeValue) {
+      affectedFilenames.push(spec.filename);
+    }
+  }
+  const _rwBefore = rewindCapture(affectedFilenames, [focusField]);
+
   for (const spec of APP.specimens) {
     const cached = tableDataCache[spec.filename];
     const fj = cached?.formatted_json || {};
@@ -4335,6 +5049,7 @@ function mergeCluster(cluster, mergeValue) {
     }
   }
 
+  rewindRecord('clusterMerge', 'Cluster Merge', `Merged ${cluster.variants.length} variants → "${mergeValue}" (${affectedFilenames.length} specimen${affectedFilenames.length !== 1 ? 's' : ''})`, _rwBefore);
   scheduleSaveState();
   renderFocusMain();
   renderFocusSidebar(getFocusCategories());
@@ -4373,6 +5088,10 @@ function applyFindReplace(findVal, replaceVal) {
   const fields = getFieldsForToolScope();
   const specimens = getSpecimensForToolScope();
 
+  // Capture before state for all specimens/fields in scope
+  const allFilenames = specimens.map(s => s.filename);
+  const _rwBefore = rewindCapture(allFilenames, fields);
+
   for (const spec of specimens) {
     for (const field of fields) {
       const currentVal = getCurrentFieldValue(spec, field);
@@ -4387,6 +5106,7 @@ function applyFindReplace(findVal, replaceVal) {
     }
   }
 
+  rewindRecord('findReplace', 'Find & Replace', `"${findVal}" → "${replaceVal}" (${count} change${count !== 1 ? 's' : ''})`, _rwBefore);
   scheduleSaveState();
   renderFocusMain();
   renderFocusSidebar(getFocusCategories());
@@ -4398,6 +5118,9 @@ function applyCaseTransform(type) {
   let count = 0;
   const fields = getFieldsForToolScope();
   const specimens = getSpecimensForToolScope();
+
+  const allFilenames = specimens.map(s => s.filename);
+  const _rwBefore = rewindCapture(allFilenames, fields);
 
   for (const spec of specimens) {
     for (const field of fields) {
@@ -4419,6 +5142,8 @@ function applyCaseTransform(type) {
     }
   }
 
+  const typeLabel = type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
+  rewindRecord('caseTransform', 'Case Transform', `${typeLabel} (${count} change${count !== 1 ? 's' : ''})`, _rwBefore);
   scheduleSaveState();
   renderFocusMain();
   renderFocusSidebar(getFocusCategories());
@@ -4543,6 +5268,17 @@ function openSettingsPopup() {
 
       <div class="settings-row">
         <div class="settings-label">
+          <div>Table Edit Lock Warning</div>
+          <div class="settings-desc">Show the warning popup when unlocking table editing</div>
+        </div>
+        <div class="table-lock-toggle ${APP.settings.editLockWarning !== false ? 'unlocked' : 'locked'}" id="setting-edit-lock-warning">
+          <div class="toggle-track"><div class="toggle-thumb"></div></div>
+          <span class="table-lock-label" style="text-transform:none">${APP.settings.editLockWarning !== false ? 'Enabled' : 'Disabled'}</span>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">
           <div>Image Cache Size</div>
           <div class="settings-desc">Number of decoded images kept in memory (100–2000). Default 500. If your device has more than 8 GB of RAM you can safely increase this to 2000 for faster browsing of large projects.</div>
         </div>
@@ -4639,6 +5375,16 @@ function openSettingsPopup() {
     toggle.classList.toggle('locked', !APP.settings.acceptAllEnabled);
     toggle.classList.toggle('unlocked', APP.settings.acceptAllEnabled);
     toggle.querySelector('.table-lock-label').textContent = APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled';
+  });
+
+  // Edit lock warning toggle
+  document.getElementById('setting-edit-lock-warning').addEventListener('click', () => {
+    const current = APP.settings.editLockWarning !== false;
+    APP.settings.editLockWarning = !current;
+    const toggle = document.getElementById('setting-edit-lock-warning');
+    toggle.classList.toggle('locked', current);
+    toggle.classList.toggle('unlocked', !current);
+    toggle.querySelector('.table-lock-label').textContent = !current ? 'Enabled' : 'Disabled';
   });
 
   // Image cache slider
@@ -4776,6 +5522,8 @@ async function performProjectReset() {
   await window.api.resetProject(APP.folderPath);
 
   // Reset in-memory state
+  REWIND.stack = [];
+  updateRewindButton();
   APP.state = { version: 1, folder_path: APP.folderPath, last_modified: new Date().toISOString(), current_specimen: '', specimens: {} };
   APP.settings = { acceptAllEnabled: false, mapTheme: 'dark', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {} };
   APP.currentIndex = 0;
@@ -4808,6 +5556,8 @@ function acceptAllFields() {
   const cat = categories.find(c => c.name === APP.activeCategory);
   if (!cat) return;
 
+  const _rwBefore = rewindCapture([spec.filename], cat.fields, { categories_confirmed: true });
+
   for (const field of cat.fields) {
     if (specState.accepted_fields[field]) continue; // Already accepted
     const val = fj[field];
@@ -4818,6 +5568,9 @@ function acceptAllFields() {
 
   specState.last_touched = new Date().toISOString();
   autoConfirmCategories(spec.filename);
+
+  rewindRecord('acceptAll', 'Accept All Fields', `${cat.fields.length} fields in ${cat.name} on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
+
   renderCategoryTabs();
   renderCategoryForm();
   renderCategoryFooter();

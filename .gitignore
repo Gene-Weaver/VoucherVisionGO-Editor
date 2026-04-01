@@ -6,6 +6,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Rewind history checkpoints
+_vvgo_editor_history.json
+
 # Test/working data (not demo data)
 test_data/
 test_data_2/
@@ -14,10 +17,12 @@ test_data copy/
 # State and reviewed files inside demo data
 demo_data/_vvgo_editor_state.json
 demo_data/_vvgo_editor_settings.json
+demo_data/_vvgo_editor_history.json
 demo_data/_prompts/
 demo_data/*__REVIEWED.json
 demo_data_backup/_vvgo_editor_state.json
 demo_data_backup/_vvgo_editor_settings.json
+demo_data_backup/_vvgo_editor_history.json
 demo_data_backup/_prompts/
 demo_data_backup/*__REVIEWED.json
 

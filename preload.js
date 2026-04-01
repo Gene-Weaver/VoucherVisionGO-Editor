@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
   selectSavePath: (defaultName) => ipcRenderer.invoke('select-save-path', defaultName),
   writeFile: (filePath, data, encoding) => ipcRenderer.invoke('write-file', filePath, data, encoding),
   resetProject: (folderPath) => ipcRenderer.invoke('reset-project', folderPath),
+  saveHistory: (folderPath, data) => ipcRenderer.invoke('save-history', folderPath, data),
+  loadHistory: (folderPath) => ipcRenderer.invoke('load-history', folderPath),
   exportXlsx: (filePath, rows) => ipcRenderer.invoke('export-xlsx', filePath, rows),
   loadSettings: (folderPath) => ipcRenderer.invoke('load-settings', folderPath),
   saveSettings: (folderPath, settings) => ipcRenderer.invoke('save-settings', folderPath, settings),

@@ -7,6 +7,7 @@ const stateManager = require('./src/backend/state-manager');
 const promptCache = require('./src/backend/prompt-cache');
 const imageDecoder = require('./src/backend/image-decoder');
 const settingsManager = require('./src/backend/settings-manager');
+const historyManager = require('./src/backend/history-manager');
 
 // ── Auto-updater configuration ──────────────────────────────
 autoUpdater.autoDownload = false;
@@ -232,6 +233,14 @@ ipcMain.handle('save-settings', async (_, folderPath, settings) => {
   return settingsManager.saveSettings(folderPath, settings);
 });
 
+ipcMain.handle('save-history', async (_, folderPath, historyData) => {
+  return historyManager.saveHistory(folderPath, historyData);
+});
+
+ipcMain.handle('load-history', async (_, folderPath) => {
+  return historyManager.loadHistory(folderPath);
+});
+
 ipcMain.handle('reset-project', async (_, folderPath) => {
   const fs = require('fs');
   const path = require('path');
@@ -251,6 +260,10 @@ ipcMain.handle('reset-project', async (_, folderPath) => {
   // Delete settings file
   const settingsFile = path.join(folderPath, '_vvgo_editor_settings.json');
   if (fs.existsSync(settingsFile)) fs.unlinkSync(settingsFile);
+
+  // Delete history file
+  const historyFile = path.join(folderPath, '_vvgo_editor_history.json');
+  if (fs.existsSync(historyFile)) fs.unlinkSync(historyFile);
 
   // Delete _prompts directory
   const promptsDir = path.join(folderPath, '_prompts');
