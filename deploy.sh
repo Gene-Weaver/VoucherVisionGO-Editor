@@ -74,7 +74,7 @@ if [ "$1" != "--skip-release" ] && [ "$1" != "--skip-builds" ]; then
       "build/VoucherVisionGO-Editor-${VERSION}-x64.zip" \
       "build/VoucherVisionGO-Editor-${VERSION}-x64.exe#Windows Portable (64-bit)" \
       "build/VoucherVisionGO-Editor-Setup-${VERSION}-x64.exe#Windows Installer (64-bit, auto-update)" \
-      "build/VoucherVisionGO-Editor-${VERSION}-x64.AppImage#Linux (64-bit)" \
+      "build/VoucherVisionGO-Editor-${VERSION}-x86_64.AppImage#Linux (64-bit)" \
       "build/latest-mac.yml" \
       "build/latest.yml" \
       "build/latest-linux.yml" \
@@ -95,7 +95,7 @@ else
     echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.zip\" \\"
     echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.exe\" \\"
     echo "    \"build/VoucherVisionGO-Editor-Setup-${VERSION}-x64.exe\" \\"
-    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x64.AppImage\" \\"
+    echo "    \"build/VoucherVisionGO-Editor-${VERSION}-x86_64.AppImage\" \\"
     echo "    \"build/latest-mac.yml\" \"build/latest.yml\" \"build/latest-linux.yml\" \\"
     echo "    --repo Gene-Weaver/VoucherVisionGO-Editor \\"
     echo "    --title \"VoucherVisionGO Editor $TAG\""
