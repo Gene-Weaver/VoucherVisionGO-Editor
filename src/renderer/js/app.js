@@ -28,6 +28,7 @@ const APP = {
 
   // Category color assignments
   categoryColors: ['var(--cat-0)', 'var(--cat-1)', 'var(--cat-2)', 'var(--cat-3)', 'var(--cat-4)', 'var(--cat-5)', 'var(--cat-6)'],
+  updateStatus: null,
 };
 
 // ── Constants ───────────────────────────────────────────────
@@ -45,6 +46,17 @@ const CATEGORY_COLORS = {
 document.addEventListener('DOMContentLoaded', () => {
   renderNavBar();
   renderFolderPicker();
+
+  // Listen for update status events from main process
+  if (window.api.onUpdateStatus) {
+    window.api.onUpdateStatus((data) => {
+      APP.updateStatus = data;
+      updateSettingsUpdateUI(data);
+      if (data.status === 'available' || data.status === 'available-manual') {
+        showUpdateNotification(data);
+      }
+    });
+  }
 });
 
 // ── View Switching ──────────────────────────────────────────
@@ -4442,6 +4454,69 @@ function applyThemeColors() {
   root.style.setProperty('--cat-misc', cc.catMisc || '#888888');
 }
 
+function timeAgo(isoString) {
+  const diff = Date.now() - new Date(isoString).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function showUpdateNotification(data) {
+  if (document.querySelector('.settings-popup')) return;
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:14px 18px;z-index:10000;box-shadow:0 4px 20px rgba(0,0,0,0.4);max-width:340px;cursor:pointer';
+  toast.innerHTML = `
+    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:4px">Update Available: v${escapeHtml(data.version)}</div>
+    <div style="font-size:11px;color:var(--text-muted)">Open Settings to update</div>
+  `;
+  toast.addEventListener('click', () => { toast.remove(); openSettingsPopup(); });
+  document.body.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 10000);
+}
+
+function updateSettingsUpdateUI(data) {
+  const statusLine = document.getElementById('update-status-line');
+  const btnDownload = document.getElementById('btn-download-update');
+  const btnInstall = document.getElementById('btn-install-update');
+  const btnCheck = document.getElementById('btn-check-update');
+  if (!statusLine) return;
+
+  switch (data.status) {
+    case 'checking':
+      statusLine.innerHTML = '<span style="color:var(--text-muted)">Checking for updates...</span>';
+      break;
+    case 'available':
+      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span>`;
+      if (btnDownload) { btnDownload.style.display = ''; btnDownload.textContent = 'Download Update'; }
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'available-manual':
+      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span><br><span style="color:var(--text-muted);font-size:11px">Portable build — download from GitHub Releases</span>`;
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'up-to-date':
+      statusLine.innerHTML = '<span style="color:#4caf50">&#10003; You are up to date</span>';
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'downloading':
+      statusLine.innerHTML = `<span style="color:var(--text-muted)">Downloading... ${Math.round(data.percent || 0)}%</span>`;
+      break;
+    case 'downloaded':
+      statusLine.innerHTML = `<span style="color:#4caf50">&#10003; Update v${escapeHtml(data.version)} ready to install</span>`;
+      if (btnDownload) btnDownload.style.display = 'none';
+      if (btnInstall) btnInstall.style.display = '';
+      break;
+    case 'error':
+      statusLine.innerHTML = `<span style="color:var(--error)">Update check failed: ${escapeHtml(data.message || 'Unknown error')}</span>`;
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+  }
+}
+
 function openSettingsPopup() {
   const overlay = document.createElement('div');
   overlay.className = 'image-modal-overlay';
@@ -4522,6 +4597,25 @@ function openSettingsPopup() {
         </div>
       </div>
 
+      <div class="settings-row" id="settings-update-section" style="flex-direction:column;align-items:stretch">
+        <div class="settings-label" style="margin-bottom:10px">
+          <div>Updates</div>
+          <div class="settings-desc">Check for new versions of VoucherVisionGO Editor</div>
+        </div>
+        <div id="update-info-container" style="font-size:12px;color:var(--text-secondary);line-height:1.8">
+          <div>Current version: <span id="update-current-version" style="font-family:var(--font-mono);color:var(--text-primary)">...</span></div>
+          <div>Installed: <span id="update-install-date" style="color:var(--text-muted)">...</span></div>
+          <div>Last checked: <span id="update-last-check" style="color:var(--text-muted)">...</span></div>
+          <div id="update-status-line" style="margin-top:6px"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <button class="btn-sm btn-primary" id="btn-check-update" style="font-size:11px">Check for Updates</button>
+          <button class="btn-sm" id="btn-download-update" style="font-size:11px;display:none">Download Update</button>
+          <button class="btn-sm" id="btn-install-update" style="font-size:11px;display:none;background:#1a5c1a;color:#4caf50;border-color:#4caf50">Restart to Update</button>
+          <a id="btn-github-releases" href="#" style="font-size:11px;color:var(--accent);text-decoration:none;margin-left:auto">View releases on GitHub &#x2197;</a>
+        </div>
+      </div>
+
       <div style="display:flex;align-items:center;gap:8px;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)">
         <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:11px">Reset Project</button>
         <div style="flex:1"></div>
@@ -4596,6 +4690,44 @@ function openSettingsPopup() {
   // Reset Project
   document.getElementById('settings-reset-project').addEventListener('click', () => {
     showResetProjectDialog();
+  });
+
+  // ── Update section ──
+  (async () => {
+    try {
+      const info = await window.api.getUpdateInfo();
+      document.getElementById('update-current-version').textContent = 'v' + info.currentVersion;
+      document.getElementById('update-install-date').textContent = info.installDate ? new Date(info.installDate).toLocaleDateString() : 'Unknown';
+      document.getElementById('update-last-check').textContent = info.lastUpdateCheck ? timeAgo(info.lastUpdateCheck) : 'Never';
+    } catch {}
+    if (APP.updateStatus) updateSettingsUpdateUI(APP.updateStatus);
+  })();
+
+  document.getElementById('btn-github-releases').addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open('https://github.com/Gene-Weaver/VoucherVisionGO-Editor/releases', '_blank');
+  });
+
+  document.getElementById('btn-check-update').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-check-update');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    const result = await window.api.checkForUpdate();
+    if (result.status !== 'checking') {
+      updateSettingsUpdateUI(result);
+      btn.disabled = false;
+      btn.textContent = 'Check for Updates';
+    }
+    document.getElementById('update-last-check').textContent = 'Just now';
+  });
+
+  document.getElementById('btn-download-update').addEventListener('click', async () => {
+    document.getElementById('btn-download-update').style.display = 'none';
+    await window.api.downloadUpdate();
+  });
+
+  document.getElementById('btn-install-update').addEventListener('click', async () => {
+    await window.api.installUpdate();
   });
 }
 

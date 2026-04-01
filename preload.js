@@ -16,5 +16,12 @@ contextBridge.exposeInMainWorld('api', {
   resetProject: (folderPath) => ipcRenderer.invoke('reset-project', folderPath),
   exportXlsx: (filePath, rows) => ipcRenderer.invoke('export-xlsx', filePath, rows),
   loadSettings: (folderPath) => ipcRenderer.invoke('load-settings', folderPath),
-  saveSettings: (folderPath, settings) => ipcRenderer.invoke('save-settings', folderPath, settings)
+  saveSettings: (folderPath, settings) => ipcRenderer.invoke('save-settings', folderPath, settings),
+
+  // Update methods
+  getUpdateInfo: () => ipcRenderer.invoke('get-update-info'),
+  checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, data) => callback(data))
 });

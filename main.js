@@ -1,10 +1,45 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const https = require('https');
+const { autoUpdater } = require('electron-updater');
 const fileManager = require('./src/backend/file-manager');
 const stateManager = require('./src/backend/state-manager');
 const promptCache = require('./src/backend/prompt-cache');
 const imageDecoder = require('./src/backend/image-decoder');
 const settingsManager = require('./src/backend/settings-manager');
+
+// ── Auto-updater configuration ──────────────────────────────
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function isPortableWindows() {
+  return process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_DIR != null;
+}
+
+function checkGitHubRelease() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/Gene-Weaver/VoucherVisionGO-Editor/releases/latest',
+      headers: { 'User-Agent': 'VoucherVisionGO-Editor' }
+    };
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const release = JSON.parse(data);
+          resolve({
+            version: release.tag_name ? release.tag_name.replace(/^v/, '') : null,
+            releaseUrl: release.html_url,
+            publishedAt: release.published_at,
+            body: release.body
+          });
+        } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
 
 let mainWindow;
 
@@ -38,6 +73,74 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+
+  // Set install date on first launch
+  const globalSettings = settingsManager.loadGlobalSettings();
+  if (!globalSettings.installDate) {
+    globalSettings.installDate = new Date().toISOString();
+    settingsManager.saveGlobalSettings(globalSettings);
+  }
+
+  // Forward autoUpdater events to renderer
+  autoUpdater.on('checking-for-update', () => {
+    mainWindow?.webContents.send('update-status', { status: 'checking' });
+  });
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'available',
+      version: info.version,
+      releaseDate: info.releaseDate
+    });
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'up-to-date',
+      version: info.version
+    });
+  });
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'downloading',
+      percent: progress.percent
+    });
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'downloaded',
+      version: info.version
+    });
+  });
+  autoUpdater.on('error', (err) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'error',
+      message: err?.message || 'Unknown error'
+    });
+  });
+
+  // Auto-check on launch (delayed 5s to not block startup)
+  if (app.isPackaged) {
+    setTimeout(async () => {
+      const gs = settingsManager.loadGlobalSettings();
+      gs.lastUpdateCheck = new Date().toISOString();
+      settingsManager.saveGlobalSettings(gs);
+
+      if (isPortableWindows()) {
+        try {
+          const release = await checkGitHubRelease();
+          const current = app.getVersion();
+          if (release.version && release.version !== current) {
+            mainWindow?.webContents.send('update-status', {
+              status: 'available-manual',
+              version: release.version,
+              releaseUrl: release.releaseUrl
+            });
+          }
+        } catch {} // Silent fail on launch
+      } else {
+        try { autoUpdater.checkForUpdates(); } catch {}
+      }
+    }, 5000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -165,4 +268,52 @@ ipcMain.handle('export-xlsx', async (_, filePath, rows) => {
   XLSX.utils.book_append_sheet(wb, ws, 'Reviewed');
   XLSX.writeFile(wb, filePath);
   return true;
+});
+
+// ── Update IPC Handlers ──────────────────────────────────────
+
+ipcMain.handle('get-update-info', async () => {
+  const gs = settingsManager.loadGlobalSettings();
+  return {
+    currentVersion: app.getVersion(),
+    installDate: gs.installDate || null,
+    lastUpdateCheck: gs.lastUpdateCheck || null,
+    isPortable: isPortableWindows(),
+    platform: process.platform
+  };
+});
+
+ipcMain.handle('check-for-update', async () => {
+  const gs = settingsManager.loadGlobalSettings();
+  gs.lastUpdateCheck = new Date().toISOString();
+  settingsManager.saveGlobalSettings(gs);
+
+  if (isPortableWindows()) {
+    try {
+      const release = await checkGitHubRelease();
+      const current = app.getVersion();
+      if (release.version && release.version !== current) {
+        return { status: 'available-manual', version: release.version, releaseUrl: release.releaseUrl };
+      }
+      return { status: 'up-to-date', version: current };
+    } catch (e) {
+      return { status: 'error', message: e.message };
+    }
+  } else {
+    try {
+      await autoUpdater.checkForUpdates();
+      return { status: 'checking' };
+    } catch (e) {
+      return { status: 'error', message: e.message };
+    }
+  }
+});
+
+ipcMain.handle('download-update', async () => {
+  autoUpdater.downloadUpdate();
+  return true;
+});
+
+ipcMain.handle('install-update', async () => {
+  autoUpdater.quitAndInstall();
 });

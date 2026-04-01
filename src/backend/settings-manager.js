@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS = {
     cat6: '#ffff7f',
     catMisc: '#888888',
   },
+  lastUpdateCheck: null,
+  installDate: null,
 };
 
 let appDataPath = null;
@@ -95,4 +97,28 @@ function saveSettings(folderPath, settings) {
   return true;
 }
 
-module.exports = { loadSettings, saveSettings, DEFAULT_SETTINGS, SETTINGS_FILENAME };
+/**
+ * Load only the global (appData) settings — for app-wide metadata like update timestamps.
+ */
+function loadGlobalSettings() {
+  let settings = {};
+  try {
+    const appDataFile = getAppDataSettingsPath();
+    if (fs.existsSync(appDataFile)) {
+      const raw = fs.readFileSync(appDataFile, 'utf-8');
+      settings = JSON.parse(raw);
+    }
+  } catch {}
+  return settings;
+}
+
+/**
+ * Save only to the global (appData) settings file.
+ */
+function saveGlobalSettings(settings) {
+  try {
+    atomicWrite(getAppDataSettingsPath(), settings);
+  } catch {}
+}
+
+module.exports = { loadSettings, saveSettings, loadGlobalSettings, saveGlobalSettings, DEFAULT_SETTINGS, SETTINGS_FILENAME };

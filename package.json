@@ -1,6 +1,6 @@
 {
   "name": "vouchervisiongo-editor",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Lightweight desktop editor for reviewing VoucherVisionGO transcription results",
   "main": "main.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "electron-builder": "^25.0.0"
   },
   "dependencies": {
+    "electron-updater": "^6.1.7",
     "js-yaml": "^4.1.0",
     "xlsx": "^0.18.5"
   },
@@ -35,12 +36,20 @@
       "icon": "assets/icon.png"
     },
     "win": {
-      "target": "portable",
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ],
       "icon": "assets/icon.png"
     },
     "linux": {
       "target": "AppImage",
       "icon": "assets/icon.png"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Gene-Weaver",
+      "repo": "VoucherVisionGO-Editor"
     }
   }
 }
