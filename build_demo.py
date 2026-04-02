@@ -23,9 +23,12 @@ print(f'Loaded {len(specimens)} specimens')
 with open(os.path.join(BASE, 'src', 'renderer', 'css', 'style.css')) as f:
     css = f.read()
 
-# Load app.js
+# Load app.js and history.js
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'app.js')) as f:
     app_js = f.read()
+
+with open(os.path.join(BASE, 'src', 'renderer', 'js', 'history.js')) as f:
+    history_js = f.read()
 
 # Load leaflet
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'lib', 'leaflet.min.js')) as f:
@@ -64,6 +67,7 @@ for pdir in prompt_search_dirs:
         prompt_parsed = {
             'promptName': prompt_name,
             'mapping': doc.get('mapping', {}),
+            'editor_tools': doc.get('editor_tools', {}),
             'rules': doc.get('rules', {}),
             'metadata': {
                 'prompt_author': doc.get('prompt_author', ''),
@@ -132,7 +136,7 @@ window.api = {{
   }},
   loadState: async () => DEMO_STATE,
   saveState: async (folder, state) => {{ Object.assign(DEMO_STATE, state); return true; }},
-  loadSettings: async () => ({{ acceptAllEnabled: true, mapTheme: 'dark', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {{}} }}),
+  loadSettings: async () => ({{ acceptAllEnabled: true, mapTheme: 'dark', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', imageCacheSize: 500, catColors: {{}} }}),
   saveSettings: async () => true,
   fetchPrompt: async () => DEMO_PARSED_PROMPT,
   writeReviewed: async (folder, filename, data) => filename.replace('.json', '__REVIEWED.json'),
@@ -140,6 +144,14 @@ window.api = {{
   selectSavePath: async () => null,
   exportXlsx: async () => true,
   writeFile: async () => true,
+  loadHistory: async () => null,
+  saveHistory: async () => true,
+  getUpdateInfo: async () => ({{ currentVersion: '1.0.7', installDate: null, lastUpdateCheck: null, isPortable: false, platform: 'demo' }}),
+  checkForUpdate: async () => ({{ status: 'up-to-date' }}),
+  downloadUpdate: async () => {{}},
+  installUpdate: async () => {{}},
+  resetProject: async () => true,
+  onUpdateStatus: null,
 }};
 """
 
@@ -184,6 +196,7 @@ html = f"""<!DOCTYPE html>
   </div>
   <script>{leaflet_js}</script>
   <script>{mock_api}</script>
+  <script>{history_js}</script>
   <script>{app_js}</script>
   <script>
     // Auto-load demo data after entering name
