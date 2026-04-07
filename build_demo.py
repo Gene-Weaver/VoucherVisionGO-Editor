@@ -67,7 +67,6 @@ for pdir in prompt_search_dirs:
         prompt_parsed = {
             'promptName': prompt_name,
             'mapping': doc.get('mapping', {}),
-            'editor_tools': doc.get('editor_tools', {}),
             'rules': doc.get('rules', {}),
             'metadata': {
                 'prompt_author': doc.get('prompt_author', ''),
@@ -77,6 +76,7 @@ for pdir in prompt_search_dirs:
                 'prompt_description': doc.get('prompt_description', ''),
                 'LLM': doc.get('LLM', ''),
             },
+            'checklist': doc.get('checklist', []),
             'raw': prompt_raw_text,
         }
         print(f'Loaded prompt: {prompt_name} from {pdir}')
@@ -242,7 +242,7 @@ html = f"""<!DOCTYPE html>
 </html>"""
 
 os.makedirs(os.path.dirname(OUT_FILE), exist_ok=True)
-with open(OUT_FILE, 'w') as f:
+with open(OUT_FILE, 'w', encoding='utf-8') as f:
     f.write(html)
 
 size_mb = os.path.getsize(OUT_FILE) / 1024 / 1024

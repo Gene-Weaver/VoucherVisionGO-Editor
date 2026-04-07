@@ -14,6 +14,7 @@ const APP = {
   currentView: 'folder-picker', // 'folder-picker', 'review', 'table'
   saveTimeout: null,
   ocrCollapsed: false,
+  focusOcrCollapsed: false,
   promptCollapsed: true,
   mapCollapsed: false,
   mapTheme: 'dark',
@@ -40,6 +41,33 @@ const CATEGORY_COLORS = {
   LOCALITY: 'var(--cat-3)',
   MISC: 'var(--cat-misc)',
 };
+
+// ── Loading Spinner ─────────────────────────────────────────
+
+let _spinnerCount = 0;
+
+function showNavSpinner() {
+  _spinnerCount++;
+  if (_spinnerCount === 1) {
+    let el = document.getElementById('global-spinner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'global-spinner';
+      el.className = 'global-spinner-overlay';
+      el.innerHTML = '<div class="global-spinner-ring"></div>';
+      document.body.appendChild(el);
+    }
+    el.style.display = '';
+  }
+}
+
+function hideNavSpinner() {
+  _spinnerCount = Math.max(0, _spinnerCount - 1);
+  if (_spinnerCount === 0) {
+    const el = document.getElementById('global-spinner');
+    if (el) el.style.display = 'none';
+  }
+}
 
 // ── Initialization ──────────────────────────────────────────
 
@@ -113,15 +141,19 @@ function updateNavBar() {
     `;
 
     // Export button only in top nav
+    const hasChecklist = APP.currentPrompt?.checklist?.length > 0;
     toggleEl.innerHTML = `
       <button class="btn-sm btn-rewind" id="btn-rewind" title="Rewind actions" style="display:none">Rewind (0)</button>
       <button class="btn-sm btn-success" id="btn-export">Export Project</button>
+      ${hasChecklist ? '<button class="btn-sm btn-icon checklist-icon-btn" id="btn-checklist" title="Checklist">&#9744;</button>' : ''}
       <button class="btn-sm btn-icon settings-icon-btn" id="btn-settings" title="Settings">&#9881;</button>
     `;
     document.getElementById('btn-rewind').addEventListener('click', openRewindPopup);
     document.getElementById('btn-export').addEventListener('click', exportProject);
+    document.getElementById('btn-checklist')?.addEventListener('click', openChecklistPopup);
     document.getElementById('btn-settings').addEventListener('click', openSettingsPopup);
     updateRewindButton();
+    updateChecklistIcon();
   } else {
     pathEl.textContent = '';
     changeBtnEl.style.display = 'none';
@@ -202,6 +234,7 @@ async function openFolderDialog() {
 
 async function loadFolder(folderPath) {
   APP.folderPath = folderPath;
+  showNavSpinner();
 
   // Scan for JSON files
   APP.specimens = await window.api.scanFolder(folderPath);
@@ -226,7 +259,8 @@ async function loadFolder(folderPath) {
       folder_path: folderPath,
       last_modified: new Date().toISOString(),
       current_specimen: APP.specimens[0].filename,
-      specimens: {}
+      specimens: {},
+      checklist_checked: []
     };
   }
 
@@ -241,12 +275,14 @@ async function loadFolder(folderPath) {
 
   showView('review');
   await loadSpecimen(APP.currentIndex);
+  hideNavSpinner();
 }
 
 // ── Specimen Loading ────────────────────────────────────────
 
 async function loadSpecimen(index) {
   if (index < 0 || index >= APP.specimens.length) return;
+  showNavSpinner();
   APP.currentIndex = index;
 
   const spec = APP.specimens[index];
@@ -276,6 +312,7 @@ async function loadSpecimen(index) {
   renderReviewView();
   updateNavBar();
   scheduleSaveState();
+  hideNavSpinner();
 }
 
 function initSpecimenState(filename) {
@@ -1666,9 +1703,12 @@ async function doExport() {
   if (!savePath) return;
 
   try {
+    showNavSpinner();
     await window.api.exportXlsx(savePath, rows);
+    hideNavSpinner();
     alert(`Export complete: ${savePath}`);
   } catch (err) {
+    hideNavSpinner();
     alert(`Export failed: ${err.message || err}`);
   }
 }
@@ -1955,6 +1995,7 @@ let focusThumbSize = 52;
 async function renderTableView() {
   const el = document.getElementById('table-view');
   if (!el) return;
+  showNavSpinner();
 
   // Load all specimen data (parallel)
   const tableUncached = APP.specimens.filter(s => !tableDataCache[s.filename]);
@@ -2069,6 +2110,7 @@ async function renderTableView() {
 
   // Load image for first row
   if (APP.specimens.length > 0) loadTableImage(0);
+  hideNavSpinner();
 }
 
 async function loadTableImage(index) {
@@ -2365,6 +2407,32 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Arrow key navigation in Focus mode
+document.addEventListener('keydown', (e) => {
+  if (APP.currentView !== 'focus') return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  // Don't intercept when editing text in inputs or contenteditables
+  const active = document.activeElement;
+  if (active?.isContentEditable) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(active?.tagName)) return;
+  if (document.querySelector('.image-modal-overlay, .rewind-overlay')) return;
+
+  e.preventDefault();
+  const specimens = focusFilter !== null
+    ? getAllValuesForField(focusField).filter(v => v.value === focusFilter).map(v => v.index)
+    : APP.specimens.map((_, i) => i);
+  if (specimens.length === 0) return;
+
+  const curPos = specimens.indexOf(tableSelectedIndex);
+  let nextPos;
+  if (e.key === 'ArrowUp') {
+    nextPos = curPos <= 0 ? specimens.length - 1 : curPos - 1;
+  } else {
+    nextPos = curPos >= specimens.length - 1 ? 0 : curPos + 1;
+  }
+  loadFocusImage(specimens[nextPos]);
+});
+
 function toggleTableLock() {
   if (tableEditingLocked) {
     // Skip warning if disabled in settings
@@ -2606,6 +2674,7 @@ let focusFilter = null; // clicked facet value or null
 async function renderFocusView() {
   const el = document.getElementById('focus-view');
   if (!el) return;
+  showNavSpinner();
 
   // Ensure all specimen data is loaded (parallel)
   const uncached = APP.specimens.filter(s => !tableDataCache[s.filename]);
@@ -2648,6 +2717,19 @@ async function renderFocusView() {
           <div class="table-image-placeholder">Select a specimen</div>
         </div>
         <div class="focus-carousel" id="focus-carousel"></div>
+        <div class="focus-ocr-panel" id="focus-ocr-panel">
+          <div class="collapsible-panel">
+            <div class="collapsible-header" id="focus-ocr-header">
+              <span>OCR Text</span>
+              <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+                <span class="collapse-arrow" id="focus-ocr-arrow">${APP.focusOcrCollapsed ? '&#9654;' : '&#9660;'}</span>
+              </div>
+            </div>
+            <div class="collapsible-body ${APP.focusOcrCollapsed ? 'collapsed' : ''}" id="focus-ocr-body">
+              <div class="scrollable-content ocr-text" id="focus-ocr-text" style="max-height:200px;overflow:auto;padding:8px 10px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary)">Select a specimen to view OCR text</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -2684,16 +2766,23 @@ async function renderFocusView() {
     if (focusField) showConfirmAllPopup(focusField);
   });
 
+  // OCR panel collapse toggle
+  document.getElementById('focus-ocr-header')?.addEventListener('click', () => {
+    APP.focusOcrCollapsed = !APP.focusOcrCollapsed;
+    document.getElementById('focus-ocr-body')?.classList.toggle('collapsed');
+    const arrow = document.getElementById('focus-ocr-arrow');
+    if (arrow) arrow.innerHTML = APP.focusOcrCollapsed ? '&#9654;' : '&#9660;';
+  });
+
   renderFocusSidebar(categories);
   renderFocusMain();
 
   // Resizable split between left and right columns (left: 50%-80%, right: 20%-50%)
   initResizeHandle('focus-col-resize', 'focus-left-col', 'focus-columns', 0.50, 0.80);
 
-  // Load first specimen image on startup
-  if (APP.specimens.length > 0) {
-    loadFocusImage(0);
-  }
+  // Start with no specimen selected — user must click to select
+  tableSelectedIndex = -1;
+  hideNavSpinner();
 }
 
 function getCategoryColorForField(field) {
@@ -3041,19 +3130,14 @@ function fingerprintCluster(fieldValues) {
 // ── Focus Main Panel ────────────────────────────────────────
 
 // Track which sections are minimized
-const focusSectionState = { values: false, clusters: false, dates: false, catalog: false, specimens: false, standardize: false, authorship: false, elevation: false, nameparser: false };
+const focusSectionState = { values: false, clusters: false, dates: false, catalog: false, specimens: false, standardize: false, authorship: false, elevation: false, nameparser: false, ocrComparison: false };
 let focusToolScope = 'field'; // 'field' or 'everything'
-let focusToolCategory = null; // dynamic from editor_tools, null = no tools shown
+let focusToolCategory = null; // null = no tools shown
 
-// Default tool categories when prompt has no editor_tools
-const DEFAULT_TOOL_CATEGORIES = ['dates', 'taxonomy', 'cluster', 'geography', 'collectors', 'coordinates', 'patterns', 'elevation'];
+const TOOL_CATEGORIES = ['dates', 'taxonomy', 'cluster', 'geography', 'collectors', 'coordinates', 'patterns', 'elevation', 'ocr'];
 
-// Get available tool categories from prompt's editor_tools mapping
 function getEditorToolCategories() {
-  const et = APP.currentPrompt?.editor_tools || {};
-  const fromPrompt = Object.keys(et).map(k => k.toLowerCase());
-  if (fromPrompt.length > 0) return fromPrompt;
-  return [...DEFAULT_TOOL_CATEGORIES];
+  return [...TOOL_CATEGORIES];
 }
 
 // Section-to-category mapping — built dynamically
@@ -3073,6 +3157,8 @@ function getFocusToolCategories() {
   if (cats.includes('taxonomy')) result.authorship = ['taxonomy'];
   // elevation → elevation
   if (cats.includes('elevation')) result.elevation = ['elevation'];
+  // ocr comparison → ocr
+  if (cats.includes('ocr')) result.ocrComparison = ['ocr'];
   return result;
 }
 
@@ -3796,9 +3882,10 @@ function renderStandardizeSection() {
   const container = document.getElementById('focus-standardize-list');
   if (!container) return;
 
-  // Skip expensive preview computation if section isn't visible
+  // Skip expensive preview computation if standardize section isn't visible
   const activeCat = focusToolCategory;
-  if (!activeCat) { container.innerHTML = ''; return; }
+  const stdCats = ['taxonomy', 'geography', 'collectors', 'coordinates'];
+  if (!activeCat || !stdCats.includes(activeCat)) { container.innerHTML = ''; return; }
   const tools = STANDARDIZE_TOOLS.filter(t => t.categories.includes(activeCat));
 
   if (tools.length === 0) {
@@ -4284,11 +4371,26 @@ function renderFocusMain() {
 
   const fieldValues = getAllValuesForField(focusField);
 
-  // If a value is selected, filter clusters/tools to that value's context
-  const clusterInput = focusFilter !== null
-    ? fieldValues.filter(v => v.value === focusFilter || ngramSimilarity(v.value, focusFilter) > 0.5)
-    : fieldValues;
-  const clusters = fingerprintCluster(clusterInput);
+  // Defer expensive analysis to only when the relevant tool category is active
+  let clusters = [];
+  let clusteredValues = new Set();
+  if (focusToolCategory === 'cluster') {
+    const clusterInput = focusFilter !== null
+      ? fieldValues.filter(v => v.value === focusFilter || ngramSimilarity(v.value, focusFilter) > 0.5)
+      : fieldValues;
+    clusters = fingerprintCluster(clusterInput);
+    for (const c of clusters) for (const v of c.variants) clusteredValues.add(v.value);
+  }
+
+  let dateFormats = { formats: [], maxCount: 1, dominantFormat: '', inconsistent: false };
+  if (focusToolCategory === 'dates') {
+    dateFormats = analyzeDateFormats(fieldValues);
+  }
+
+  let catalogPatterns = { patterns: [], maxCount: 1 };
+  if (focusToolCategory === 'patterns') {
+    catalogPatterns = analyzeCatalogPatterns(fieldValues);
+  }
 
   // Build facet data
   const valueCounts = {};
@@ -4299,14 +4401,6 @@ function renderFocusMain() {
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => b.count - a.count);
   const maxCount = facets.length > 0 ? facets[0].count : 1;
-
-  const clusteredValues = new Set();
-  for (const c of clusters) for (const v of c.variants) clusteredValues.add(v.value);
-
-  // Date format analysis
-  const dateFormats = analyzeDateFormats(fieldValues);
-  // Catalog pattern analysis
-  const catalogPatterns = analyzeCatalogPatterns(fieldValues);
 
   const fixedSection = (key, title, badgeHtml, bodyHtml, extraHtml = '') => `
     <div class="focus-section" data-section="${key}">
@@ -4359,14 +4453,16 @@ function renderFocusMain() {
     <div class="focus-top-row" id="focus-row-0">
       ${fixedSection('values', 'Values', ` &middot; ${facets.length} unique`, `
         <div class="facet-list">
-          ${facets.map(f => `
-            <div class="facet-row ${focusFilter === f.value ? 'active' : ''}" data-value="${escapeAttr(f.value)}">
+          ${facets.map(f => {
+            const isClustered = clusteredValues.has(f.value) && focusToolCategory === 'cluster';
+            return `
+            <div class="facet-row ${focusFilter === f.value ? 'active' : ''} ${isClustered ? 'facet-clustered' : ''}" data-value="${escapeAttr(f.value)}">
               <span class="facet-value ${f.value === '' ? 'empty-val' : ''}">${f.value === '' ? '(empty)' : escapeHtml(f.value)}</span>
-              <div class="facet-bar-container"><div class="facet-bar" style="width:${(f.count / maxCount) * 100}%"></div></div>
-              <span class="facet-count">${f.count}</span>
-              ${clusteredValues.has(f.value) ? '<span class="facet-flag">!</span>' : ''}
+              <div class="facet-bar-container"><div class="facet-bar" style="width:${(f.count / maxCount) * 100}%${isClustered ? ';background:var(--warning)' : ''}"></div></div>
+              <span class="facet-count" ${isClustered ? 'style="color:var(--warning)"' : ''}>${f.count}</span>
+              ${isClustered ? '<span class="facet-flag">!</span>' : ''}
             </div>
-          `).join('')}
+          `}).join('')}
         </div>
       `)}
       ${fixedSection('specimens', 'Specimens', focusFilter !== null ? ' &middot; filtered' : '', `
@@ -4481,7 +4577,13 @@ function renderFocusMain() {
     `)}
       </div>
 
-      <div class="focus-row focus-tool-row" id="focus-row-elev" data-tool-cats="elevation" style="display:flex;flex-direction:column">
+      <div class="focus-row focus-tool-row" id="focus-row-ocr" data-tool-cats="ocr">
+      ${fixedSection('ocrComparison', 'OCR Comparison', '', `
+        <div id="focus-ocr-comparison-list"></div>
+      `, '<span style="flex:1"></span><span style="font-size:9px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">Words <span style="background:var(--ocr-highlight);padding:0 3px;border-radius:2px;color:#fff">highlighted</span> are not found in OCR &middot; Edits auto-confirm &middot; <span style="font-size:12px">&#8635;</span> to mark unconfirmed</span>')}
+      </div>
+
+      <div class="focus-row focus-tool-row" id="focus-row-elev" data-tool-cats="elevation">
         ${fixedSection('elevation', 'Elevation Discrepancy', '', `
           <div id="focus-elevation-list"></div>
         `)}
@@ -4571,8 +4673,7 @@ function renderFocusMain() {
   el.querySelectorAll('.cluster-chip[data-filter-value]').forEach(chip => {
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
-      const val = chip.dataset.filterValue;
-      focusFilter = (focusFilter === val) ? null : val;
+      focusFilter = chip.dataset.filterValue;
       renderFocusMain();
     });
   });
@@ -4607,7 +4708,7 @@ function renderFocusMain() {
   const prevCat = focusToolCategory;
   const catOptions = toolCats.map(c => ({
     value: c,
-    label: c.charAt(0).toUpperCase() + c.slice(1)
+    label: c === 'ocr' ? 'OCR' : c.charAt(0).toUpperCase() + c.slice(1)
   }));
   const catSw = createSlideSwitch('focus-tool-category-switch', catOptions, focusToolCategory || '', (val) => {
     if (val === prevCat) {
@@ -4644,10 +4745,23 @@ function renderFocusMain() {
   document.getElementById('btn-open-name-parser')?.addEventListener('click', showCollectorNamePopup);
   renderAuthorshipSection();
   renderElevationDiscrepancySection();
+  renderOcrComparisonSection();
   initFocusElevCalc();
   renderFocusCarousel(fieldValues);
   updateFocusPrimaryState();
   updateFocusConfirmButtons();
+
+  // If the selected specimen isn't in the current filtered list, clear the image
+  const visibleIndices = new Set(
+    (focusFilter !== null ? fieldValues.filter(v => v.value === focusFilter) : fieldValues)
+      .map(v => v.index)
+  );
+  if (tableSelectedIndex >= 0 && !visibleIndices.has(tableSelectedIndex)) {
+    tableSelectedIndex = -1;
+    const imgContainer = document.getElementById('focus-image-container');
+    if (imgContainer) imgContainer.innerHTML = '<div class="table-image-placeholder">Select a specimen</div>';
+    updateFocusOcrPanel(-1);
+  }
 }
 
 // ── Date Format Analyzer ────────────────────────────────────
@@ -4932,6 +5046,193 @@ function updateFocusPrimaryState() {
   }
 }
 
+function updateFocusOcrPanel(index) {
+  const ocrEl = document.getElementById('focus-ocr-text');
+  if (!ocrEl) return;
+  if (index < 0 || index >= APP.specimens.length) {
+    ocrEl.textContent = 'Select a specimen to view OCR text';
+    return;
+  }
+  const spec = APP.specimens[index];
+  const cached = tableDataCache[spec.filename];
+  const ocrText = cached?.ocr || '';
+  if (!ocrText) {
+    ocrEl.textContent = '(No OCR text available for this specimen)';
+  } else {
+    ocrEl.textContent = ocrText;
+  }
+  // Also refresh OCR comparison highlights if the section is visible
+  updateOcrComparisonHighlights();
+}
+
+function getOcrTextForSpecimen(index) {
+  if (index < 0 || index >= APP.specimens.length) return '';
+  const spec = APP.specimens[index];
+  const cached = tableDataCache[spec.filename];
+  return (cached?.ocr || '').toLowerCase();
+}
+
+function highlightNonOcrWords(text, ocrTextLower) {
+  if (!text || !ocrTextLower) return escapeHtml(text || '');
+  // Split text into words, check each against the OCR text
+  // We consider a "word" to be a contiguous sequence of non-whitespace characters
+  return text.split(/(\s+)/).map(part => {
+    if (/^\s+$/.test(part)) return part; // whitespace
+    if (part === '') return '';
+    // Strip leading/trailing punctuation for matching purposes, but keep for display
+    const stripped = part.replace(/^[^\w]+|[^\w]+$/g, '').toLowerCase();
+    if (stripped === '') return escapeHtml(part); // pure punctuation
+    if (ocrTextLower.includes(stripped)) {
+      return escapeHtml(part);
+    } else {
+      return `<span class="ocr-mismatch">${escapeHtml(part)}</span>`;
+    }
+  }).join('');
+}
+
+function renderOcrComparisonSection() {
+  const container = document.getElementById('focus-ocr-comparison-list');
+  if (!container) return;
+
+  const idx = tableSelectedIndex;
+  if (idx < 0 || idx >= APP.specimens.length || !focusField) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Select a specimen to compare</div>';
+    return;
+  }
+
+  const spec = APP.specimens[idx];
+  const specState = APP.state.specimens[spec.filename];
+  const value = getCurrentFieldValue(spec, focusField);
+  const ocrTextLower = getOcrTextForSpecimen(idx);
+  const valHtml = value === '' ? '<span class="cell-empty-placeholder" style="font-size:17px">(empty)</span>' : highlightNonOcrWords(value, ocrTextLower);
+
+  // Determine status
+  const unconfirmedVal = specState?.unconfirmed_fields?.[focusField];
+  const accepted = specState?.accepted_fields?.[focusField];
+  let statusLabel, statusClass;
+  if (unconfirmedVal !== undefined) {
+    statusLabel = 'Unconfirmed Change';
+    statusClass = 'unconfirmed';
+  } else if (accepted) {
+    statusLabel = getStatusLabel(accepted.source);
+    statusClass = accepted.source;
+  } else {
+    statusLabel = 'pending';
+    statusClass = 'pending';
+  }
+
+  const isUnconfirmed = unconfirmedVal !== undefined;
+
+  container.innerHTML = `
+    <div class="ocr-compare-header">
+      <span style="font-size:10px;color:var(--text-muted)">#${idx + 1}</span>
+      <span style="font-size:11px;color:var(--cat-0);font-weight:500">${escapeHtml(spec.filename.replace(/\.[^.]+$/, ''))}</span>
+      <span class="field-status ${statusClass}" style="font-size:10px;margin-left:4px">${statusLabel}</span>
+      <span style="flex:1"></span>
+      <button class="btn-icon ocr-confirm-btn" title="Confirm current value" style="font-size:14px;color:var(--accent)">&#10003;</button>
+      ${!isUnconfirmed ? `<button class="btn-icon ocr-uncertain-btn" title="Set status to Unconfirmed Change" style="font-size:14px;color:var(--text-muted)">&#8635;</button>` : ''}
+    </div>
+    <div class="ocr-compare-content ocr-compare-cell" id="ocr-compare-editable" contenteditable="true" data-index="${idx}" data-field="${escapeAttr(focusField)}">${valHtml}</div>
+  `;
+
+  // Shared confirm logic — accepts the current (possibly edited) value
+  const confirmOcrValue = () => {
+    const editable = document.getElementById('ocr-compare-editable');
+    let newValue = editable ? editable.textContent.replace(/\n/g, ' ').trim() : value;
+    // The placeholder "(empty)" is display-only, not a real value
+    if (newValue === '(empty)') newValue = '';
+    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+    const st = APP.state.specimens[spec.filename];
+    const _rwBefore = rewindCapture([spec.filename], [focusField], { categories_confirmed: true });
+    const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[focusField];
+    const aiStr = aiValue !== undefined ? String(aiValue) : '';
+    let source;
+    if (newValue === aiStr && aiStr !== '') source = 'ai';
+    else if (aiStr === '' && newValue !== '') source = 'user_added';
+    else if (newValue === '') source = 'confirmed_empty';
+    else source = 'edited';
+    st.accepted_fields[focusField] = { value: newValue, source };
+    if (st.unconfirmed_fields?.[focusField] !== undefined) delete st.unconfirmed_fields[focusField];
+    st.last_touched = new Date().toISOString();
+    autoConfirmCategories(spec.filename);
+    rewindRecord('ocrEdit', 'OCR Edit', `"${focusField}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
+    scheduleSaveState();
+    scheduleAutoSaveReviewed(spec.filename);
+  };
+
+  // Advance to next specimen in the current filtered list
+  const advanceToNextSpecimen = () => {
+    const specimens = focusFilter !== null
+      ? getAllValuesForField(focusField).filter(v => v.value === focusFilter).map(v => v.index)
+      : APP.specimens.map((_, i) => i);
+    if (specimens.length === 0) return;
+    const curPos = specimens.indexOf(idx);
+    const nextPos = curPos >= specimens.length - 1 ? 0 : curPos + 1;
+    loadFocusImage(specimens[nextPos]);
+  };
+
+  // Wire the contenteditable
+  const editable = document.getElementById('ocr-compare-editable');
+  if (editable) {
+    editable._originalValue = value;
+    editable._confirmed = false;
+
+    // On blur, confirm only if value changed and Enter didn't already handle it
+    editable.addEventListener('blur', () => {
+      if (editable._confirmed) return;
+      let newValue = editable.textContent.replace(/\n/g, ' ').trim();
+      if (newValue === '(empty)') newValue = '';
+      if (newValue !== editable._originalValue) {
+        confirmOcrValue();
+        renderFocusSidebar(getFocusCategories());
+        renderFocusMain();
+      }
+    });
+
+    // Enter = confirm + advance to next specimen
+    editable.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        editable._confirmed = true;
+        confirmOcrValue();
+        renderFocusSidebar(getFocusCategories());
+        advanceToNextSpecimen();
+      }
+    });
+  }
+
+  // Wire confirm (checkmark) button
+  container.querySelector('.ocr-confirm-btn')?.addEventListener('click', () => {
+    confirmOcrValue();
+    renderFocusSidebar(getFocusCategories());
+    renderFocusMain();
+  });
+
+  // Wire the uncertain (loop) button
+  container.querySelector('.ocr-uncertain-btn')?.addEventListener('click', () => {
+    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+    const st = APP.state.specimens[spec.filename];
+    const _rwBefore = rewindCapture([spec.filename], [focusField], { categories_confirmed: true });
+
+    const currentValue = getCurrentFieldValue(spec, focusField);
+    if (!st.unconfirmed_fields) st.unconfirmed_fields = {};
+    st.unconfirmed_fields[focusField] = currentValue;
+    if (st.accepted_fields?.[focusField]) delete st.accepted_fields[focusField];
+    autoConfirmCategories(spec.filename);
+
+    rewindRecord('markUncertain', 'Mark Uncertain', `"${focusField}" on ${spec.filename.replace(/\.[^.]+$/, '')}`, _rwBefore);
+    scheduleSaveState();
+    scheduleAutoSaveReviewed(spec.filename);
+    renderFocusSidebar(getFocusCategories());
+    renderFocusMain();
+  });
+}
+
+function updateOcrComparisonHighlights() {
+  // Re-render the OCR comparison panel for the current active specimen
+  renderOcrComparisonSection();
+}
+
 async function loadFocusImage(index) {
   const container = document.getElementById('focus-image-container');
   if (!container || index < 0 || index >= APP.specimens.length) return;
@@ -4940,7 +5241,10 @@ async function loadFocusImage(index) {
   container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
   updateFocusPrimaryState();
   updateFocusElevCalcForSpecimen(index);
+  updateFocusOcrPanel(index);
+  showNavSpinner();
   const dataUrl = await window.api.getImage(APP.folderPath, spec.filename, tableImageType);
+  hideNavSpinner();
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(spec.filename)}">`;
     container.querySelector('img').addEventListener('click', () => openImageModal(dataUrl));
@@ -5240,6 +5544,106 @@ function updateSettingsUpdateUI(data) {
       if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
       break;
   }
+}
+
+// ── Checklist ───────────────────────────────────────────────
+
+function updateChecklistIcon() {
+  const btn = document.getElementById('btn-checklist');
+  if (!btn) return;
+  const checklist = APP.currentPrompt?.checklist || [];
+  if (checklist.length === 0) return;
+  const checked = APP.state.checklist_checked || [];
+  const allDone = checklist.length > 0 && checklist.every((_, i) => checked.includes(i));
+  btn.innerHTML = allDone ? '&#9745;' : '&#9744;';
+  btn.style.color = allDone ? 'var(--accent)' : '';
+}
+
+function openChecklistPopup() {
+  const checklist = APP.currentPrompt?.checklist || [];
+  if (checklist.length === 0) return;
+  if (!APP.state.checklist_checked) APP.state.checklist_checked = [];
+  const checked = APP.state.checklist_checked;
+
+  // Map tool category names for bracket-link matching
+  const toolCatMap = {};
+  for (const cat of TOOL_CATEGORIES) {
+    toolCatMap[cat.toLowerCase()] = cat;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+
+  const renderItems = () => checklist.map((item, i) => {
+    const isChecked = checked.includes(i);
+    // Parse [BracketedWords] into clickable links if they match a tool category
+    const itemHtml = escapeHtml(item).replace(/\[([^\]]+)\]/g, (match, word) => {
+      const catKey = word.toLowerCase();
+      if (toolCatMap[catKey]) {
+        return `<a class="checklist-tool-link" data-tool-cat="${escapeAttr(toolCatMap[catKey])}" title="Open ${word} tool in Focus mode">[${escapeHtml(word)}]</a>`;
+      }
+      return match;
+    });
+    return `
+      <div class="checklist-item ${isChecked ? 'checked' : ''}" data-index="${i}">
+        <span class="checklist-checkbox">${isChecked ? '&#9745;' : '&#9744;'}</span>
+        <span class="checklist-text">${itemHtml}</span>
+      </div>
+    `;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="checklist-popup" onclick="event.stopPropagation()">
+      <div class="checklist-header">
+        <span style="font-weight:600;font-size:14px">Checklist</span>
+        <span style="flex:1"></span>
+        <button class="btn-sm" id="checklist-close">Close</button>
+      </div>
+      <div class="checklist-body" id="checklist-body">
+        ${renderItems()}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', () => overlay.remove());
+  document.getElementById('checklist-close').addEventListener('click', () => overlay.remove());
+
+  const wireItems = () => {
+    const body = document.getElementById('checklist-body');
+    if (!body) return;
+
+    body.querySelectorAll('.checklist-item').forEach(el => {
+      // Toggle check on click (but not on tool link clicks)
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.checklist-tool-link')) return;
+        const idx = parseInt(el.dataset.index);
+        const pos = checked.indexOf(idx);
+        if (pos >= 0) {
+          checked.splice(pos, 1);
+        } else {
+          checked.push(idx);
+        }
+        scheduleSaveState();
+        updateChecklistIcon();
+        body.innerHTML = renderItems();
+        wireItems();
+      });
+    });
+
+    // Wire tool category links
+    body.querySelectorAll('.checklist-tool-link').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cat = link.dataset.toolCat;
+        overlay.remove();
+        focusToolCategory = cat;
+        showView('focus');
+        renderFocusView();
+      });
+    });
+  };
+  wireItems();
 }
 
 function openSettingsPopup() {
