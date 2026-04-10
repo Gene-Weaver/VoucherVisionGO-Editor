@@ -1,18 +1,36 @@
 #!/bin/bash
 # Deploy VoucherVisionGO Editor — builds all targets + updates demo
-# Usage: ./deploy.sh [--skip-builds]
+# Usage: ./deploy.sh [--skip-builds] [--skip-release]
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")"
 
 WEBPAGE_DIR="/Users/willwe/Dropbox/VoucherVisionGO/webpage"
+SKIP_BUILDS=0
+SKIP_RELEASE=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --skip-builds)
+            SKIP_BUILDS=1
+            ;;
+        --skip-release)
+            SKIP_RELEASE=1
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            echo "Usage: ./deploy.sh [--skip-builds] [--skip-release]"
+            exit 1
+            ;;
+    esac
+done
 
 echo "=== VoucherVisionGO Editor Deploy ==="
 echo ""
 
 # 1. Build demo
 echo "Building demo..."
-python3 build_demo.py
+./build_demo.sh
 echo ""
 
 # 2. Copy demo to webpage
@@ -22,7 +40,7 @@ echo "  → $WEBPAGE_DIR/editor-demo.html"
 echo ""
 
 # 3. Build app (unless --skip-builds)
-if [ "$1" != "--skip-builds" ]; then
+if [ "$SKIP_BUILDS" -ne 1 ]; then
     unset ELECTRON_RUN_AS_NODE
 
     echo "Building all platforms in parallel..."
@@ -30,18 +48,18 @@ if [ "$1" != "--skip-builds" ]; then
 
     # Run all four builds in parallel, each logging to a temp file
     LOGDIR=$(mktemp -d)
-    trap "rm -rf $LOGDIR" EXIT
+    trap 'rm -rf "$LOGDIR"' EXIT
 
-    (echo "[mac-arm64] Building..." && npm run dist -- --mac --arm64 2>&1 | grep -E "building|packaging|signing" | sed 's/^/  [mac-arm64] /' && echo "[mac-arm64] Done.") > "$LOGDIR/mac-arm64.log" 2>&1 &
+    (npm run dist -- --mac --arm64 > "$LOGDIR/mac-arm64.raw.log" 2>&1) &
     PID_MAC_ARM=$!
 
-    (echo "[mac-x64] Building..." && npm run dist -- --mac --x64 2>&1 | grep -E "building|packaging|signing" | sed 's/^/  [mac-x64] /' && echo "[mac-x64] Done.") > "$LOGDIR/mac-x64.log" 2>&1 &
+    (npm run dist -- --mac --x64 > "$LOGDIR/mac-x64.raw.log" 2>&1) &
     PID_MAC_X64=$!
 
-    (echo "[win-x64] Building..." && npm run dist -- --win --x64 2>&1 | grep -E "building|packaging" | sed 's/^/  [win-x64] /' && echo "[win-x64] Done.") > "$LOGDIR/win-x64.log" 2>&1 &
+    (npm run dist -- --win --x64 > "$LOGDIR/win-x64.raw.log" 2>&1) &
     PID_WIN=$!
 
-    (echo "[linux-x64] Building..." && npm run dist -- --linux --x64 2>&1 | grep -E "building|packaging" | sed 's/^/  [linux-x64] /' && echo "[linux-x64] Done.") > "$LOGDIR/linux-x64.log" 2>&1 &
+    (npm run dist -- --linux --x64 > "$LOGDIR/linux-x64.raw.log" 2>&1) &
     PID_LINUX=$!
 
     # Wait for all and track failures
@@ -49,13 +67,19 @@ if [ "$1" != "--skip-builds" ]; then
     for PID_NAME in "mac-arm64:$PID_MAC_ARM" "mac-x64:$PID_MAC_X64" "win-x64:$PID_WIN" "linux-x64:$PID_LINUX"; do
         NAME="${PID_NAME%%:*}"
         PID="${PID_NAME##*:}"
+        echo "  [$NAME] Building..."
         if wait "$PID"; then
             echo "  ✓ $NAME completed"
         else
-            echo "  ✗ $NAME FAILED (exit $?)"
+            STATUS=$?
+            echo "  ✗ $NAME FAILED (exit $STATUS)"
             FAILED=1
         fi
-        cat "$LOGDIR/$NAME.log"
+        if grep -E -i "building|packaging|signing|artifact|executing|downloading" "$LOGDIR/$NAME.raw.log" >/dev/null 2>&1; then
+            grep -E -i "building|packaging|signing|artifact|executing|downloading" "$LOGDIR/$NAME.raw.log" | sed "s/^/    [$NAME] /"
+        else
+            tail -n 20 "$LOGDIR/$NAME.raw.log" | sed "s/^/    [$NAME] /"
+        fi
         echo ""
     done
 
@@ -82,7 +106,7 @@ echo "Version: $VERSION  Tag: $TAG"
 echo ""
 
 # 6. Create GitHub release (unless --skip-release)
-if [ "$1" != "--skip-release" ] && [ "$1" != "--skip-builds" ]; then
+if [ "$SKIP_RELEASE" -ne 1 ] && [ "$SKIP_BUILDS" -ne 1 ]; then
     echo "Creating GitHub release $TAG..."
 
     # Delete existing release/tag if re-deploying same version

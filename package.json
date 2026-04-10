@@ -1,6 +1,6 @@
 {
   "name": "vouchervisiongo-editor",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Lightweight desktop editor for reviewing VoucherVisionGO transcription results",
   "main": "main.js",
   "scripts": {

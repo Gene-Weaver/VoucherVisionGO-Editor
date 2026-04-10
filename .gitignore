@@ -2,12 +2,21 @@ node_modules/
 build/
 dist/
 *.log
-*.xlsx
 .DS_Store
 Thumbs.db
+*.tmp.*
 
-# Rewind history checkpoints
+# New three-tier architecture folders (generated at runtime)
+_INPROGRESS/
+_REVIEWED/
+Reviewed_Data/
+
+# Legacy state/reviewed files (pre-migration)
+_vvgo_editor_state.json
+_vvgo_editor_settings.json
 _vvgo_editor_history.json
+*__REVIEWED.json
+*.xlsx
 
 # Test/working data (not demo data)
 test_data/
@@ -15,11 +24,17 @@ test_data_2/
 test_data copy/
 
 # State and reviewed files inside demo data
+demo_data/_INPROGRESS/
+demo_data/_REVIEWED/
+demo_data/Reviewed_Data/
 demo_data/_vvgo_editor_state.json
 demo_data/_vvgo_editor_settings.json
 demo_data/_vvgo_editor_history.json
 demo_data/_prompts/
 demo_data/*__REVIEWED.json
+demo_data_backup/_INPROGRESS/
+demo_data_backup/_REVIEWED/
+demo_data_backup/Reviewed_Data/
 demo_data_backup/_vvgo_editor_state.json
 demo_data_backup/_vvgo_editor_settings.json
 demo_data_backup/_vvgo_editor_history.json

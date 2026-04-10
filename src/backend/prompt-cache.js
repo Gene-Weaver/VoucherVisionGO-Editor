@@ -57,7 +57,9 @@ async function fetchPrompt(promptName, folderPath) {
       error: `Failed to fetch prompt: ${err.message}`,
       mapping: {},
       rules: {},
-      metadata: {}
+      metadata: {},
+      review_not_required: [],
+      checklist: [],
     };
   }
 }
@@ -107,6 +109,7 @@ function parsePromptYaml(rawYaml, promptName) {
     },
     instructions: doc.instructions || '',
     checklist: doc.checklist || [],
+    review_not_required: doc.review_not_required || [],
     raw: rawYaml
   };
 }

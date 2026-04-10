@@ -2,7 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
-const SETTINGS_FILENAME = '_vvgo_editor_settings.json';
+const INPROGRESS_DIR = '_INPROGRESS';
+const SETTINGS_FILENAME = '_settings.json';
+// Legacy path (for migration detection)
+const LEGACY_SETTINGS_FILENAME = '_vvgo_editor_settings.json';
 
 const DEFAULT_SETTINGS = {
   version: 1,
@@ -10,7 +13,7 @@ const DEFAULT_SETTINGS = {
   mapTheme: 'dark',
   rowColorOdd: '#2f2f2f',
   rowColorEven: '#242424',
-  imageCacheSize: 500,
+  imageCacheSize: 2000,
   catColors: {
     cat0: '#479EF5',
     cat1: '#CA50F7',
@@ -35,7 +38,11 @@ function getAppDataSettingsPath() {
 }
 
 function getProjectSettingsPath(folderPath) {
-  return path.join(folderPath, SETTINGS_FILENAME);
+  return path.join(folderPath, INPROGRESS_DIR, SETTINGS_FILENAME);
+}
+
+function getLegacySettingsPath(folderPath) {
+  return path.join(folderPath, LEGACY_SETTINGS_FILENAME);
 }
 
 function atomicWrite(filePath, data) {
@@ -49,6 +56,7 @@ function atomicWrite(filePath, data) {
 /**
  * Load settings. Reads from appData first, then project folder as fallback.
  * Merges with defaults so new settings always have values.
+ * Checks new path first, then legacy path (with auto-migration).
  */
 function loadSettings(folderPath) {
   let settings = { ...DEFAULT_SETTINGS };
@@ -60,17 +68,46 @@ function loadSettings(folderPath) {
       const raw = fs.readFileSync(appDataFile, 'utf-8');
       Object.assign(settings, JSON.parse(raw));
     }
-  } catch {}
+  } catch (e) {
+    console.warn('Failed to load app-level settings:', e.message);
+  }
 
   // Try project folder (overrides appData if present)
   if (folderPath) {
+    let loaded = false;
+
+    // New path: _INPROGRESS/_settings.json
     try {
       const projectFile = getProjectSettingsPath(folderPath);
       if (fs.existsSync(projectFile)) {
         const raw = fs.readFileSync(projectFile, 'utf-8');
         Object.assign(settings, JSON.parse(raw));
+        loaded = true;
       }
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to load project settings from new path:', e.message);
+    }
+
+    // Legacy path: _vvgo_editor_settings.json (auto-migrate)
+    if (!loaded) {
+      try {
+        const legacyFile = getLegacySettingsPath(folderPath);
+        if (fs.existsSync(legacyFile)) {
+          const raw = fs.readFileSync(legacyFile, 'utf-8');
+          Object.assign(settings, JSON.parse(raw));
+
+          // Auto-migrate to new path
+          try {
+            atomicWrite(getProjectSettingsPath(folderPath), settings);
+            fs.unlinkSync(legacyFile);
+          } catch (e) {
+            console.warn('Failed to migrate settings file:', e.message);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load legacy project settings:', e.message);
+      }
+    }
   }
 
   return settings;
@@ -85,13 +122,17 @@ function saveSettings(folderPath, settings) {
   // Write to appData
   try {
     atomicWrite(getAppDataSettingsPath(), settings);
-  } catch {}
+  } catch (e) {
+    console.warn('Failed to save app-level settings:', e.message);
+  }
 
-  // Write to project folder
+  // Write to project folder (_INPROGRESS/_settings.json)
   if (folderPath) {
     try {
       atomicWrite(getProjectSettingsPath(folderPath), settings);
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to save project settings:', e.message);
+    }
   }
 
   return true;
@@ -108,7 +149,9 @@ function loadGlobalSettings() {
       const raw = fs.readFileSync(appDataFile, 'utf-8');
       settings = JSON.parse(raw);
     }
-  } catch {}
+  } catch (e) {
+    console.warn('Failed to load global settings:', e.message);
+  }
   return settings;
 }
 
@@ -118,7 +161,9 @@ function loadGlobalSettings() {
 function saveGlobalSettings(settings) {
   try {
     atomicWrite(getAppDataSettingsPath(), settings);
-  } catch {}
+  } catch (e) {
+    console.warn('Failed to save global settings:', e.message);
+  }
 }
 
-module.exports = { loadSettings, saveSettings, loadGlobalSettings, saveGlobalSettings, DEFAULT_SETTINGS, SETTINGS_FILENAME };
+module.exports = { loadSettings, saveSettings, loadGlobalSettings, saveGlobalSettings, DEFAULT_SETTINGS, SETTINGS_FILENAME, LEGACY_SETTINGS_FILENAME };

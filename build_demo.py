@@ -3,10 +3,13 @@
 
 import json
 import os
+import urllib.parse
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 TEST_DIR = os.path.join(BASE, 'demo_data')
 OUT_FILE = os.path.join(BASE, 'build', 'demo.html')
+ICON_DIR = os.path.join(BASE, 'src', 'renderer', 'icons')
+PACKAGE_JSON = os.path.join(BASE, 'package.json')
 
 # Load specimens
 specimens = []
@@ -30,6 +33,9 @@ with open(os.path.join(BASE, 'src', 'renderer', 'js', 'app.js')) as f:
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'history.js')) as f:
     history_js = f.read()
 
+with open(os.path.join(BASE, 'src', 'shared', 'completion.js')) as f:
+    completion_js = f.read()
+
 # Load leaflet
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'lib', 'leaflet.min.js')) as f:
     leaflet_js = f.read()
@@ -37,12 +43,47 @@ with open(os.path.join(BASE, 'src', 'renderer', 'js', 'lib', 'leaflet.min.js')) 
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'lib', 'leaflet.min.css')) as f:
     leaflet_css = f.read()
 
-# Load and parse prompt with proper YAML parser
 import yaml
+
+
+def read_json(path):
+    with open(path, encoding='utf-8') as fh:
+        return json.load(fh)
+
+
+def collect_field_schema(items):
+    seen = set()
+    ordered = []
+    for item in items:
+        for key in item['data'].get('formatted_json', {}).keys():
+            if key not in seen:
+                seen.add(key)
+                ordered.append(key)
+    return ordered
+
+
+def svg_data_url(path):
+    with open(path, encoding='utf-8') as fh:
+        svg = fh.read().strip()
+    return 'data:image/svg+xml;charset=utf-8,' + urllib.parse.quote(svg, safe='')
+
+
+def inline_icon_refs(text):
+    if not os.path.isdir(ICON_DIR):
+        return text
+    for icon_name in os.listdir(ICON_DIR):
+        if not icon_name.endswith('.svg'):
+            continue
+        data_url = svg_data_url(os.path.join(ICON_DIR, icon_name))
+        text = text.replace(f"../icons/{icon_name}", data_url)
+        text = text.replace(f"icons/{icon_name}", data_url)
+    return text
 
 prompt_parsed = None
 prompt_raw_text = ''
 prompt_name = ''
+package_meta = read_json(PACKAGE_JSON)
+app_version = package_meta.get('version', '0.0.0')
 
 # Find the prompt name from first specimen
 for s in specimens:
@@ -77,6 +118,7 @@ for pdir in prompt_search_dirs:
                 'LLM': doc.get('LLM', ''),
             },
             'checklist': doc.get('checklist', []),
+            'review_not_required': doc.get('review_not_required', []),
             'raw': prompt_raw_text,
         }
         print(f'Loaded prompt: {prompt_name} from {pdir}')
@@ -86,6 +128,11 @@ for pdir in prompt_search_dirs:
 if not prompt_parsed:
     print(f'WARNING: Could not find prompt {prompt_name}')
 
+field_schema = collect_field_schema(specimens)
+
+css = inline_icon_refs(css)
+app_js = inline_icon_refs(app_js)
+
 # Build specimen data JS
 specimen_js_data = json.dumps([{
     'filename': s['filename'],
@@ -94,26 +141,54 @@ specimen_js_data = json.dumps([{
 
 # Build the mock API layer
 prompt_js = json.dumps(prompt_parsed) if prompt_parsed else 'null'
+field_schema_js = json.dumps(field_schema)
+version_js = json.dumps(app_version)
 
 mock_api = f"""
 // ── Demo Mock API Layer ─────────────────────────────────
 const DEMO_SPECIMENS = {specimen_js_data};
 const DEMO_PARSED_PROMPT = {prompt_js};
-const DEMO_STATE = {{ version: 1, specimens: {{}} }};
+const DEMO_FIELD_SCHEMA = {field_schema_js};
+const DEMO_VERSION = {version_js};
+const DEMO_FOLDER = '/demo/specimens';
+globalThis.__VVGO_DEMO__ = true;
+const cloneDemo = (value) => JSON.parse(JSON.stringify(value));
+const DEMO_STATE = {{ version: 1, folder_path: DEMO_FOLDER, current_specimen: '', specimens: {{}} }};
+const DEMO_SETTINGS = {{
+  acceptAllEnabled: true,
+  confirmRecordsEnabled: true,
+  editLockWarning: true,
+  mapTheme: 'light',
+  rowColorOdd: '#2f2f2f',
+  rowColorEven: '#242424',
+  imageCacheSize: 2000,
+  catColors: {{}}
+}};
+const DEMO_PROJECT = {{
+  version: 1,
+  folder_path: DEMO_FOLDER,
+  last_modified: new Date().toISOString(),
+  current_specimen: DEMO_SPECIMENS[0]?.filename || '',
+  checklist_checked: [],
+  prompt_name: DEMO_PARSED_PROMPT?.promptName || '',
+  prompt_field_schema: DEMO_FIELD_SCHEMA,
+  save_seq: 0
+}};
 
 // Mock window.api
 window.api = {{
-  selectFolder: async () => '/demo/specimens',
+  selectFolder: async () => DEMO_FOLDER,
   scanFolder: async () => DEMO_SPECIMENS.map(s => ({{
     filename: s.filename,
     hasReviewed: false,
     reviewComplete: false,
+    hasInProgress: !!DEMO_STATE.specimens[s.filename],
     prompt: s.data.prompt
   }})),
   readSpecimen: async (folder, filename) => {{
     const spec = DEMO_SPECIMENS.find(s => s.filename === filename);
     if (!spec) return null;
-    const result = JSON.parse(JSON.stringify(spec.data));
+    const result = cloneDemo(spec.data);
     if (result.collage_info) {{
       delete result.collage_info.base64image_text_collage;
       delete result.collage_info.base64image_input_resized;
@@ -122,7 +197,7 @@ window.api = {{
   }},
   readSpecimenRaw: async (folder, filename) => {{
     const spec = DEMO_SPECIMENS.find(s => s.filename === filename);
-    return spec ? JSON.parse(JSON.stringify(spec.data)) : null;
+    return spec ? cloneDemo(spec.data) : null;
   }},
   getImage: async (folder, filename, type) => {{
     const spec = DEMO_SPECIMENS.find(s => s.filename === filename);
@@ -134,19 +209,57 @@ window.api = {{
     else if (type === 'original') b64 = spec.data.collage_info.base64image_input_resized;
     return b64 ? 'data:' + mime + ';base64,' + b64 : null;
   }},
-  loadState: async () => DEMO_STATE,
-  saveState: async (folder, state) => {{ Object.assign(DEMO_STATE, state); return true; }},
-  loadSettings: async () => ({{ acceptAllEnabled: true, mapTheme: 'dark', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', imageCacheSize: 500, catColors: {{}} }}),
-  saveSettings: async () => true,
-  fetchPrompt: async () => DEMO_PARSED_PROMPT,
+  warmImageCache: async () => true,
+  fetchPrompt: async () => cloneDemo(DEMO_PARSED_PROMPT || {{ mapping: {{}}, rules: {{}}, metadata: {{}}, checklist: [], review_not_required: [], raw: '' }}),
   writeReviewed: async (folder, filename, data) => filename.replace('.json', '__REVIEWED.json'),
   getStats: async () => ({{ total: DEMO_SPECIMENS.length, reviewed: 0 }}),
+  collectFieldSchema: async () => cloneDemo(DEMO_FIELD_SCHEMA),
+  validateFieldSchema: async () => ({{
+    valid: true,
+    referenceSpecimen: DEMO_SPECIMENS[0]?.filename || '',
+    violations: []
+  }}),
+  detectLegacyFormat: async () => ({{
+    isLegacy: false,
+    hasOldState: false,
+    hasRootReviewed: false,
+    hasInProgressDir: true
+  }}),
+  writeInProgress: async (folder, filename, data) => {{
+    DEMO_STATE.specimens[filename] = cloneDemo(data);
+    DEMO_STATE.current_specimen = filename;
+    DEMO_PROJECT.current_specimen = filename;
+    DEMO_PROJECT.last_modified = new Date().toISOString();
+    return true;
+  }},
+  readInProgress: async (folder, filename) => cloneDemo(DEMO_STATE.specimens[filename] || null),
+  readAllInProgress: async () => cloneDemo(DEMO_STATE.specimens),
+  loadProject: async () => cloneDemo(DEMO_PROJECT),
+  saveProject: async (folder, projectState) => {{
+    Object.assign(DEMO_PROJECT, cloneDemo(projectState || {{}}));
+    DEMO_PROJECT.last_modified = new Date().toISOString();
+    return true;
+  }},
+  acquireLock: async () => ({{ success: true }}),
+  forceAcquireLock: async () => ({{ success: true }}),
+  releaseLock: async () => true,
+  generateAndWriteReviewed: async (folder, filename, inProgressData) => ({{
+    filename: filename.replace('.json', '__REVIEWED.json'),
+    data: cloneDemo(inProgressData || {{}})
+  }}),
+  migrateReviewedFiles: async () => true,
+  flushSaves: () => ({{ success: true }}),
+  loadState: async () => cloneDemo(DEMO_STATE),
+  saveState: async (folder, state) => {{ Object.assign(DEMO_STATE, cloneDemo(state || {{}})); return true; }},
+  loadSettings: async () => cloneDemo(DEMO_SETTINGS),
+  saveSettings: async (folder, settings) => {{ Object.assign(DEMO_SETTINGS, cloneDemo(settings || {{}})); return true; }},
   selectSavePath: async () => null,
   exportXlsx: async () => true,
+  ensureExportDir: async () => '/demo/export',
   writeFile: async () => true,
   loadHistory: async () => null,
   saveHistory: async () => true,
-  getUpdateInfo: async () => ({{ currentVersion: '1.0.7', installDate: null, lastUpdateCheck: null, isPortable: false, platform: 'demo' }}),
+  getUpdateInfo: async () => ({{ currentVersion: DEMO_VERSION, installDate: null, lastUpdateCheck: null, isPortable: false, platform: 'demo' }}),
   checkForUpdate: async () => ({{ status: 'up-to-date' }}),
   downloadUpdate: async () => {{}},
   installUpdate: async () => {{}},
@@ -196,6 +309,7 @@ html = f"""<!DOCTYPE html>
   </div>
   <script>{leaflet_js}</script>
   <script>{mock_api}</script>
+  <script>{completion_js}</script>
   <script>{history_js}</script>
   <script>{app_js}</script>
   <script>

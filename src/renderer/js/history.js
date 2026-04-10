@@ -2,9 +2,13 @@
 
 const REWIND = {
   stack: [],          // Array of history entries, newest first (index 0 = most recent)
-  maxEntries: 20,
+  maxEntries: 50,
   _saveTimeout: null,
 };
+
+function cloneAcceptedFieldEntry(entry) {
+  return entry ? structuredClone(entry) : undefined;
+}
 
 // ── Capture & Record ────────────────────────────────────────
 
@@ -19,16 +23,20 @@ const REWIND = {
 function rewindCapture(filenames, fields, options = {}) {
   const snapshot = {};
   for (const fn of filenames) {
-    const st = APP.state.specimens[fn];
-    if (!st) continue;
+    const st = APP.state.specimens[fn] || {
+      accepted_fields: {},
+      unconfirmed_fields: {},
+      categories_confirmed: [],
+      flagged: false,
+      flag_note: '',
+      flag_tags: [],
+    };
 
     const snap = { accepted_fields: {}, unconfirmed_fields: {} };
 
     for (const field of fields) {
       // Deep-copy accepted_fields entry (or undefined if not set)
-      snap.accepted_fields[field] = st.accepted_fields?.[field]
-        ? { value: st.accepted_fields[field].value, source: st.accepted_fields[field].source }
-        : undefined;
+      snap.accepted_fields[field] = cloneAcceptedFieldEntry(st.accepted_fields?.[field]);
 
       // Deep-copy unconfirmed_fields entry (or undefined if not set)
       snap.unconfirmed_fields[field] = st.unconfirmed_fields?.[field] !== undefined
@@ -42,6 +50,7 @@ function rewindCapture(filenames, fields, options = {}) {
     if (options.flagged) {
       snap.flagged = st.flagged || false;
       snap.flag_note = st.flag_note || '';
+      snap.flag_tags = [...(st.flag_tags || [])];
     }
 
     snapshot[fn] = snap;
@@ -70,9 +79,7 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
     if (before.accepted_fields) {
       const afDiff = {};
       for (const [field, oldVal] of Object.entries(before.accepted_fields)) {
-        const newVal = st.accepted_fields?.[field]
-          ? { value: st.accepted_fields[field].value, source: st.accepted_fields[field].source }
-          : undefined;
+        const newVal = cloneAcceptedFieldEntry(st.accepted_fields?.[field]);
 
         const oldStr = oldVal ? JSON.stringify(oldVal) : 'undefined';
         const newStr = newVal ? JSON.stringify(newVal) : 'undefined';
@@ -110,9 +117,14 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
 
     // Diff flagged
     if (before.flagged !== undefined) {
-      if (before.flagged !== st.flagged || before.flag_note !== (st.flag_note || '')) {
+      const newTags = [...(st.flag_tags || [])];
+      const oldTagsStr = JSON.stringify([...(before.flag_tags || [])].sort());
+      const newTagsStr = JSON.stringify([...newTags].sort());
+      const tagsChanged = oldTagsStr !== newTagsStr;
+      if (before.flagged !== st.flagged || before.flag_note !== (st.flag_note || '') || tagsChanged) {
         specDiff.flagged = { old: before.flagged, new: st.flagged || false };
         specDiff.flag_note = { old: before.flag_note, new: st.flag_note || '' };
+        specDiff.flag_tags = { old: [...(before.flag_tags || [])], new: newTags };
       }
     }
 
@@ -128,6 +140,8 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
   const entry = {
     id: crypto.randomUUID(),
     timestamp: Date.now(),
+    username: APP.username || '',
+    session_id: APP.sessionId || null,
     action,
     label,
     summary,
@@ -146,17 +160,23 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
 
   // Save to disk
   scheduleRewindCheckpoint();
+
+  if (typeof recordProgressTrackerEntry === 'function') {
+    recordProgressTrackerEntry(entry);
+  }
 }
 
 // ── Rewind ──────────────────────────────────────────────────
 
 /**
  * Reverse-apply a single history entry's diffs.
+ * Returns an array of filenames that were skipped (specimen no longer exists).
  */
 function applyDiffReverse(entry) {
+  const skipped = [];
   for (const [fn, specDiff] of Object.entries(entry.diffs)) {
     const st = APP.state.specimens[fn];
-    if (!st) continue; // specimen was removed — skip gracefully
+    if (!st) { skipped.push(fn); continue; }
 
     // Restore accepted_fields
     if (specDiff.accepted_fields) {
@@ -165,7 +185,7 @@ function applyDiffReverse(entry) {
           delete st.accepted_fields?.[field];
         } else {
           if (!st.accepted_fields) st.accepted_fields = {};
-          st.accepted_fields[field] = { value: diff.old.value, source: diff.old.source };
+          st.accepted_fields[field] = cloneAcceptedFieldEntry(diff.old);
         }
       }
     }
@@ -191,10 +211,12 @@ function applyDiffReverse(entry) {
     if (specDiff.flagged) {
       st.flagged = specDiff.flagged.old;
       st.flag_note = specDiff.flag_note.old;
+      if (specDiff.flag_tags) st.flag_tags = [...specDiff.flag_tags.old];
     }
 
     st.last_touched = new Date().toISOString();
   }
+  return skipped;
 }
 
 /**
@@ -202,24 +224,35 @@ function applyDiffReverse(entry) {
  * Removes rewound entries from the stack permanently.
  */
 function rewindTo(stackIndex) {
+  // Collect affected specimens BEFORE applying diffs (issue #14)
+  const affectedFilenames = new Set();
+  const allSkipped = new Set();
   for (let i = 0; i <= stackIndex; i++) {
-    applyDiffReverse(REWIND.stack[i]);
+    for (const fn of Object.keys(REWIND.stack[i].diffs)) {
+      affectedFilenames.add(fn);
+    }
+    const skipped = applyDiffReverse(REWIND.stack[i]);
+    for (const fn of skipped) allSkipped.add(fn);
   }
 
   // Remove rewound entries
   REWIND.stack.splice(0, stackIndex + 1);
 
-  // Save state + re-render
-  scheduleSaveState();
+  // Save only affected specimens (not all)
+  for (const fn of affectedFilenames) {
+    scheduleInProgressSave(fn);
+  }
+
+  scheduleProjectSave();
   reRenderCurrentView();
   updateRewindButton();
   scheduleRewindCheckpoint();
 
-  // Also trigger auto-save for all affected specimens
-  const affectedSpecimens = new Set();
-  // We already applied the diffs, just trigger saves for all specimens in the project
-  for (const spec of APP.specimens) {
-    scheduleAutoSaveReviewed(spec.filename);
+  // Warn user if some specimens were skipped (no longer in session)
+  if (allSkipped.size > 0) {
+    const names = [...allSkipped].map(fn => fn.replace(/\.[^.]+$/, '')).join(', ');
+    console.warn('Rewind skipped specimens no longer in session:', names);
+    alert(`Rewind completed, but changes to ${allSkipped.size} specimen(s) could not be restored because they are no longer in this session:\n\n${names}`);
   }
 }
 
@@ -239,7 +272,7 @@ function reRenderCurrentView() {
       const flagBtn = document.getElementById('btn-flag');
       if (flagBtn && specState) {
         flagBtn.classList.toggle('flagged', specState.flagged);
-        flagBtn.innerHTML = specState.flagged ? '&#9873; Flagged' : '&#9872; Flag';
+        flagBtn.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px">${flagIconSvg(specState.flagged)} ${specState.flagged ? 'Flagged' : 'Flag'}</span>`;
       }
       break;
     case 'table':
@@ -268,6 +301,7 @@ async function saveRewindCheckpoint() {
     await window.api.saveHistory(APP.folderPath, {
       version: 1,
       saved_at: new Date().toISOString(),
+      folder_path: APP.folderPath,
       stack: REWIND.stack,
     });
   } catch (e) {
@@ -280,13 +314,12 @@ async function loadRewindCheckpoint() {
   try {
     const data = await window.api.loadHistory(APP.folderPath);
     if (data && data.version === 1 && Array.isArray(data.stack)) {
-      // Staleness check: if state was modified after checkpoint, discard
-      const stateModified = APP.state?.last_modified ? new Date(APP.state.last_modified).getTime() : 0;
-      const checkpointSaved = data.saved_at ? new Date(data.saved_at).getTime() : 0;
-      if (checkpointSaved >= stateModified - 2000) {
-        REWIND.stack = data.stack.slice(0, REWIND.maxEntries);
-      } else {
+      // Identity check: only load history if it belongs to this project folder
+      if (data.folder_path && data.folder_path !== APP.folderPath) {
+        console.warn('Rewind history belongs to a different folder, discarding');
         REWIND.stack = [];
+      } else {
+        REWIND.stack = data.stack.slice(0, REWIND.maxEntries);
       }
     }
   } catch (e) {
@@ -308,9 +341,12 @@ function updateRewindButton() {
 function openRewindPopup() {
   if (REWIND.stack.length === 0) return;
 
-  // Remove existing popup if any
+  // Toggle existing popup if any
   const existing = document.getElementById('rewind-overlay');
-  if (existing) existing.remove();
+  if (existing) {
+    existing.remove();
+    return;
+  }
 
   let selectedCount = 1; // default: rewind 1 action
 
@@ -325,12 +361,13 @@ function openRewindPopup() {
     overlay.innerHTML = `
       <div class="rewind-popup" onclick="event.stopPropagation()">
         <div class="rewind-header">
-          <span class="rewind-title">Rewind</span>
-          <button class="rewind-close" id="rewind-close">&times;</button>
+          <span class="rewind-title">Rewind <span style="font-size:11px;color:var(--text-muted);font-weight:normal">(${REWIND.stack.length} / ${REWIND.maxEntries} actions stored)</span></span>
+          <button class="btn-sm btn-icon popup-close-btn" id="rewind-close" title="Close"><img src="icons/close.svg" alt="Close"></button>
         </div>
         <div class="rewind-body">
           <div class="rewind-timeline">
             <div class="rewind-entry rewind-current">
+              <div class="rewind-connector rewind-connector-down ${REWIND.stack.length > 0 && selectedCount > 0 ? 'selected' : ''}"></div>
               <div class="rewind-dot current"></div>
               <div class="rewind-entry-text">
                 <div class="rewind-entry-label">Current State</div>
@@ -338,7 +375,7 @@ function openRewindPopup() {
             </div>
             ${REWIND.stack.map((entry, i) => `
               <div class="rewind-entry ${i < selectedCount ? 'rewind-selected' : ''}" data-index="${i}">
-                <div class="rewind-connector ${i < selectedCount ? 'selected' : ''}"></div>
+                <div class="rewind-connector ${i < selectedCount ? 'selected' : ''} ${i === selectedCount - 1 ? 'selected-last' : ''}"></div>
                 <div class="rewind-dot ${i < selectedCount ? 'selected' : ''}"></div>
                 <div class="rewind-entry-text">
                   <div class="rewind-entry-label">${escapeHtml(entry.label)}</div>
@@ -397,8 +434,9 @@ function showRewindConfirmation(count) {
   });
 
   overlay.innerHTML = `
-    <div class="rewind-confirm-popup" onclick="event.stopPropagation()">
-      <div class="rewind-confirm-title">Rewind ${count} action${count > 1 ? 's' : ''}?</div>
+    <div class="rewind-confirm-popup" style="position:relative" onclick="event.stopPropagation()">
+      <button class="btn-sm btn-icon popup-close-btn popup-close-btn-floating" id="rewind-confirm-close" title="Close"><img src="icons/close.svg" alt="Close"></button>
+      <div class="rewind-confirm-title" style="padding-right:24px">Rewind ${count} action${count > 1 ? 's' : ''}?</div>
       <div class="rewind-confirm-body">
         <div class="rewind-confirm-text">This will undo the following:</div>
         <ul class="rewind-confirm-list">
@@ -415,6 +453,7 @@ function showRewindConfirmation(count) {
 
   document.body.appendChild(overlay);
 
+  overlay.querySelector('#rewind-confirm-close').addEventListener('click', () => overlay.remove());
   overlay.querySelector('#rewind-confirm-cancel').addEventListener('click', () => overlay.remove());
   overlay.querySelector('#rewind-confirm-go').addEventListener('click', () => {
     overlay.remove();
@@ -433,14 +472,5 @@ function formatRewindTime(timestamp) {
   return d.toLocaleDateString();
 }
 
-// ── Save checkpoint on close ────────────────────────────────
-
-window.addEventListener('beforeunload', () => {
-  if (APP.folderPath && REWIND.stack.length > 0) {
-    window.api.saveHistory(APP.folderPath, {
-      version: 1,
-      saved_at: new Date().toISOString(),
-      stack: REWIND.stack,
-    });
-  }
-});
+// beforeunload save is now handled by the unified handler in app.js
+// which calls flushSaves() synchronously with rewind history included.
