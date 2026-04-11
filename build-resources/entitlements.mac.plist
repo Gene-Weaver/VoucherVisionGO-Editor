@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required for Electron on macOS hardened runtime.
+       JIT compilation is used by V8 (the JavaScript engine). -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Required because Electron allocates writable+executable memory for V8. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Required because Electron loads helper frameworks that are signed with
+       the team's own cert rather than Apple's system signing. Without this,
+       the hardened runtime blocks them. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- Required so the app can read user-chosen files from the standard
+       NSOpenPanel (the "Select Folder" dialog). -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>

@@ -5,6 +5,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Auto-load code-signing secrets if present. Copy .env.signing.example to
+# .env.signing and fill in the real values — it is gitignored.
+if [ -f .env.signing ]; then
+    # shellcheck disable=SC1091
+    source .env.signing
+fi
+
 WEBPAGE_DIR="/Users/willwe/Dropbox/VoucherVisionGO/webpage"
 SKIP_BUILDS=0
 SKIP_RELEASE=0
@@ -26,6 +33,13 @@ for arg in "$@"; do
 done
 
 echo "=== VoucherVisionGO Editor Deploy ==="
+echo ""
+
+# Read version once up-front so it's available to the build/notarize/release
+# steps without having to query node multiple times.
+VERSION=$(node -e "console.log(require('./package.json').version)")
+TAG="v${VERSION}"
+echo "Version: $VERSION  Tag: $TAG"
 echo ""
 
 # 1. Build demo
@@ -75,8 +89,11 @@ if [ "$SKIP_BUILDS" -ne 1 ]; then
             echo "  ✗ $NAME FAILED (exit $STATUS)"
             FAILED=1
         fi
-        if grep -E -i "building|packaging|signing|artifact|executing|downloading" "$LOGDIR/$NAME.raw.log" >/dev/null 2>&1; then
-            grep -E -i "building|packaging|signing|artifact|executing|downloading" "$LOGDIR/$NAME.raw.log" | sed "s/^/    [$NAME] /"
+        # Surface the meaningful per-build lines, including notarization status
+        # so a silent notarize-skip can never hide again.
+        FILTER='building|packaging|signing|artifact|executing|downloading|notariz|stapl|error|fail|⨯|✗'
+        if grep -E -i "$FILTER" "$LOGDIR/$NAME.raw.log" >/dev/null 2>&1; then
+            grep -E -i "$FILTER" "$LOGDIR/$NAME.raw.log" | sed "s/^/    [$NAME] /"
         else
             tail -n 20 "$LOGDIR/$NAME.raw.log" | sed "s/^/    [$NAME] /"
         fi
@@ -86,6 +103,62 @@ if [ "$SKIP_BUILDS" -ne 1 ]; then
     if [ "$FAILED" = "1" ]; then
         echo "ERROR: One or more builds failed. Aborting."
         exit 1
+    fi
+
+    # 3b. Notarize and staple macOS DMG containers.
+    #
+    # electron-builder's `notarize: true` option only notarizes the .app
+    # inside the .dmg — it does NOT submit the DMG container itself, so the
+    # DMG ends up with a notarized .app but no DMG-level ticket. This means
+    # offline users (or users on older macOS) can hit Gatekeeper warnings
+    # when mounting the DMG. We fix it here by submitting each finished DMG
+    # to Apple separately, then stapling the returned ticket to the DMG.
+    #
+    # The .app inside is already notarized+stapled by electron-builder, so
+    # this is a fast second pass — Apple usually re-uses the existing
+    # ticket and responds in a minute or two.
+    if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
+        echo "Notarizing and stapling macOS DMG containers..."
+        echo ""
+        for arch in arm64 x64; do
+            DMG="build/VoucherVisionGO-Editor-${VERSION}-${arch}.dmg"
+            if [ ! -f "$DMG" ]; then
+                echo "  ⚠ $DMG not found, skipping"
+                continue
+            fi
+            echo "  [$arch] Submitting $(basename "$DMG") to Apple..."
+            SUBMIT_OUT=$(xcrun notarytool submit "$DMG" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$APPLE_TEAM_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --wait \
+                --output-format json 2>&1)
+            STATUS=$(echo "$SUBMIT_OUT" | grep -o '"status":[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+            if [ "$STATUS" != "Accepted" ]; then
+                echo "  ✗ [$arch] Notarization failed (status: $STATUS)"
+                echo "$SUBMIT_OUT" | sed "s/^/    /"
+                exit 1
+            fi
+            echo "  ✓ [$arch] Apple Accepted — stapling..."
+            if xcrun stapler staple "$DMG" 2>&1 | sed "s/^/    /"; then
+                # Verify the staple was actually applied
+                if xcrun stapler validate "$DMG" >/dev/null 2>&1; then
+                    echo "  ✓ [$arch] Stapled and validated $(basename "$DMG")"
+                else
+                    echo "  ✗ [$arch] Staple validation failed for $(basename "$DMG")"
+                    exit 1
+                fi
+            else
+                echo "  ✗ [$arch] Stapling failed for $(basename "$DMG")"
+                exit 1
+            fi
+            echo ""
+        done
+    else
+        echo "⚠ Skipping DMG notarization — Apple credentials not set."
+        echo "  Set APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD in"
+        echo "  .env.signing (see .env.signing.example for the template)."
+        echo ""
     fi
 else
     echo "Skipping app builds (--skip-builds)"
@@ -99,13 +172,8 @@ echo ""
 echo "=== Demo ==="
 ls -lh "$WEBPAGE_DIR/editor-demo.html"
 echo ""
-# 5. Read version from package.json
-VERSION=$(node -e "console.log(require('./package.json').version)")
-TAG="v${VERSION}"
-echo "Version: $VERSION  Tag: $TAG"
-echo ""
 
-# 6. Create GitHub release (unless --skip-release)
+# 5. Create GitHub release (unless --skip-release)
 if [ "$SKIP_RELEASE" -ne 1 ] && [ "$SKIP_BUILDS" -ne 1 ]; then
     echo "Creating GitHub release $TAG..."
 

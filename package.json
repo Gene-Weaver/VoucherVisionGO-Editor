@@ -1,6 +1,6 @@
 {
   "name": "vouchervisiongo-editor",
-  "version": "1.0.9",
+  "version": "1.0.11",
   "description": "Lightweight desktop editor for reviewing VoucherVisionGO transcription results",
   "main": "main.js",
   "scripts": {
@@ -37,7 +37,12 @@
         "dmg",
         "zip"
       ],
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build-resources/entitlements.mac.plist",
+      "entitlementsInherit": "build-resources/entitlements.mac.plist",
+      "notarize": true
     },
     "win": {
       "target": [

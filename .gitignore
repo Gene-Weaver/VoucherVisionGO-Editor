@@ -43,3 +43,6 @@ demo_data_backup/*__REVIEWED.json
 
 # Electron builder cache
 .electron-builder-cache/
+
+# Code-signing secrets (see .env.signing.example for the template)
+.env.signing
