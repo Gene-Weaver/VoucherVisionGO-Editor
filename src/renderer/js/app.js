@@ -12,6 +12,7 @@ const APP = {
   project: null,          // Project-level UI state from _INPROGRESS/_project.json
   activeCategory: null,
   imageType: 'collage',
+  imageZoomMode: 'fit',
   currentView: 'folder-picker', // 'folder-picker', 'review', 'table'
   projectSaveTimeout: null,
   ocrCollapsed: false,
@@ -1161,10 +1162,11 @@ async function renderLeftPanel() {
     <div class="panel-right-image" id="panel-right-image">
       <div class="image-viewer" id="image-viewer">
         <div class="image-viewer-header">
+          <div id="image-zoom-switch-container"></div>
           <span>Image</span>
           <div id="image-type-switch-container"></div>
         </div>
-        <div class="image-container" id="image-container">
+        <div class="image-container image-fit-mode" id="image-container">
           <div class="image-placeholder">Loading image...</div>
         </div>
       </div>
@@ -1191,6 +1193,16 @@ async function renderLeftPanel() {
   });
   document.getElementById('image-type-switch-container').innerHTML = imgSw.html;
   imgSw.setup();
+
+  const zoomSw = createSlideSwitch('image-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], APP.imageZoomMode, (val) => {
+    APP.imageZoomMode = val;
+    applyImageZoomMode('image-container', val);
+  });
+  document.getElementById('image-zoom-switch-container').innerHTML = zoomSw.html;
+  zoomSw.setup();
 
   loadImage();
   renderMap();
@@ -1243,8 +1255,21 @@ async function loadImage() {
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="Specimen image" id="specimen-image">`;
     document.getElementById('specimen-image').addEventListener('click', () => openImageModal(dataUrl));
+    applyImageZoomMode('image-container', APP.imageZoomMode);
   } else {
     container.innerHTML = `<div class="image-placeholder">${APP.imageType === 'original' ? 'Original image not available yet' : 'No image available'}</div>`;
+  }
+}
+
+function applyImageZoomMode(containerId, mode) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (mode === 'zoom') {
+    container.classList.add('image-zoom-mode');
+    container.classList.remove('image-fit-mode');
+  } else {
+    container.classList.add('image-fit-mode');
+    container.classList.remove('image-zoom-mode');
   }
 }
 
@@ -1252,14 +1277,128 @@ function openImageModal(dataUrl) {
   const overlay = document.createElement('div');
   overlay.className = 'image-modal-overlay';
   overlay.innerHTML = `
-    <div style="position:relative;display:inline-block" onclick="event.stopPropagation()">
-      ${popupCloseBtnHtml('image-modal-close', 'Close', true)}
-      <img src="${dataUrl}" alt="Specimen image zoomed">
+    <div class="image-modal-viewport" onclick="event.stopPropagation()">
+      <button class="btn-sm btn-icon popup-close-btn popup-close-btn-floating image-modal-close-btn" id="image-modal-close" title="Close"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></button>
+      <div class="image-modal-canvas">
+        <img src="${dataUrl}" alt="Specimen image zoomed">
+      </div>
     </div>
   `;
-  const close = () => overlay.remove();
+
+  const viewport = overlay.querySelector('.image-modal-viewport');
+  const canvas = overlay.querySelector('.image-modal-canvas');
+  const img = overlay.querySelector('img');
+
+  // Scale=1 means "fit to viewport". Max = 3x native resolution.
+  let scale = 1, minScale = 1, maxScale = 1;
+  let tx = 0, ty = 0;
+
+  function computeBounds() {
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const iw = img.naturalWidth * scale;
+    const ih = img.naturalHeight * scale;
+    // If image is smaller than viewport at this scale, center it
+    if (iw <= vw) tx = 0;
+    else tx = Math.min(0, Math.max(vw - iw, tx));
+    if (ih <= vh) ty = 0;
+    else ty = Math.min(0, Math.max(vh - ih, ty));
+  }
+
+  function applyTransform() {
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const iw = img.naturalWidth * scale;
+    const ih = img.naturalHeight * scale;
+    const ox = iw < vw ? (vw - iw) / 2 : tx;
+    const oy = ih < vh ? (vh - ih) / 2 : ty;
+    img.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+  }
+
+  img.addEventListener('load', () => {
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const fitScale = Math.min(vw / img.naturalWidth, vh / img.naturalHeight, 1);
+    minScale = fitScale;
+    maxScale = 3; // 3x native resolution
+    scale = fitScale;
+    tx = 0; ty = 0;
+    applyTransform();
+  });
+
+  // Scroll-wheel zoom toward cursor
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const prevScale = scale;
+    const factor = e.deltaY > 0 ? 0.92 : 1.08;
+    scale = Math.min(Math.max(scale * factor, minScale), maxScale);
+    if (scale === prevScale) return;
+
+    // Compute current image offset (centering when small)
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const prevIW = img.naturalWidth * prevScale;
+    const prevIH = img.naturalHeight * prevScale;
+    const prevOX = prevIW < vw ? (vw - prevIW) / 2 : tx;
+    const prevOY = prevIH < vh ? (vh - prevIH) / 2 : ty;
+
+    // Zoom toward cursor
+    const ratio = scale / prevScale;
+    tx = mx - ratio * (mx - prevOX);
+    ty = my - ratio * (my - prevOY);
+    computeBounds();
+    applyTransform();
+
+    // Update cursor
+    canvas.style.cursor = scale > minScale + 0.001 ? 'grab' : 'default';
+  }, { passive: false });
+
+  // Drag to pan
+  let dragging = false, startX, startY;
+  const onMouseMove = (e) => {
+    if (!dragging) return;
+    tx = e.clientX - startX;
+    ty = e.clientY - startY;
+    computeBounds();
+    applyTransform();
+  };
+  const onMouseUp = () => {
+    dragging = false;
+    canvas.style.cursor = scale > minScale + 0.001 ? 'grab' : 'default';
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+  };
+  canvas.addEventListener('mousedown', (e) => {
+    if (scale <= minScale + 0.001) return; // no pan when fully fitted
+    dragging = true;
+    // Use current visual offset as drag start
+    const vw = canvas.clientWidth;
+    const vh = canvas.clientHeight;
+    const iw = img.naturalWidth * scale;
+    const ih = img.naturalHeight * scale;
+    startX = e.clientX - (iw < vw ? tx : tx);
+    startY = e.clientY - (ih < vh ? ty : ty);
+    canvas.style.cursor = 'grabbing';
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    e.preventDefault();
+  });
+
+  // Close handlers
+  const close = () => {
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+    overlay.remove();
+  };
   overlay.addEventListener('click', close);
-  overlay.querySelector('#image-modal-close').addEventListener('click', close);
+  overlay.querySelector('#image-modal-close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    close();
+  });
   document.body.appendChild(overlay);
 }
 
@@ -3759,6 +3898,7 @@ function rebuildSpecimenIndexMap() {
 }
 let tableSelectedIndex = 0;
 let tableImageType = 'collage';
+let tableImageZoomMode = 'fit';
 let tableEditingLocked = true;
 let tableSelectedCell = null;   // Currently highlighted td element
 let tableSelectedField = null;  // Field name of last selected cell (survives virtual scroll)
@@ -3942,10 +4082,11 @@ async function renderTableView() {
       <div class="resize-handle" id="table-resize-handle"></div>
       <div class="table-image-panel" id="table-image-panel">
         <div class="image-viewer-header">
+          <div id="table-zoom-switch-container"></div>
           <span>Image</span>
           <div id="table-image-switch-container"></div>
         </div>
-        <div class="table-image-container" id="table-image-container">
+        <div class="table-image-container image-fit-mode" id="table-image-container">
           <div class="table-image-placeholder">Select a row to view image</div>
         </div>
         <div class="table-key-container">
@@ -3977,6 +4118,16 @@ async function renderTableView() {
   });
   document.getElementById('table-image-switch-container').innerHTML = tableImgSw.html;
   tableImgSw.setup();
+
+  const tableZoomSw = createSlideSwitch('table-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], tableImageZoomMode, (val) => {
+    tableImageZoomMode = val;
+    applyImageZoomMode('table-image-container', val);
+  });
+  document.getElementById('table-zoom-switch-container').innerHTML = tableZoomSw.html;
+  tableZoomSw.setup();
 
   // Table view switch
   const tableSw = createSlideSwitch('table-view-switch', [
@@ -4046,6 +4197,7 @@ async function loadTableImage(index) {
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(spec.filename))}">`;
     container.querySelector('img').addEventListener('click', () => openImageModal(dataUrl));
+    applyImageZoomMode('table-image-container', tableImageZoomMode);
   } else {
     container.innerHTML = `<div class="table-image-placeholder">${tableImageType === 'original' ? 'Original not available' : 'No image'}</div>`;
   }
@@ -4708,10 +4860,11 @@ async function renderFocusView() {
       <div class="resize-handle" id="focus-col-resize"></div>
       <div class="focus-right-col" id="focus-image-panel">
         <div class="image-viewer-header">
+          <div id="focus-zoom-switch-container"></div>
           <span>Image</span>
           <div id="focus-image-switch-container"></div>
         </div>
-        <div class="table-image-container" id="focus-image-container">
+        <div class="table-image-container image-fit-mode" id="focus-image-container">
           <div class="table-image-placeholder">Select a specimen</div>
         </div>
         <div class="focus-carousel" id="focus-carousel"></div>
@@ -4755,6 +4908,16 @@ async function renderFocusView() {
   });
   document.getElementById('focus-image-switch-container').innerHTML = focusImgSw.html;
   focusImgSw.setup();
+
+  const focusZoomSw = createSlideSwitch('focus-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], tableImageZoomMode, (val) => {
+    tableImageZoomMode = val;
+    applyImageZoomMode('focus-image-container', val);
+  });
+  document.getElementById('focus-zoom-switch-container').innerHTML = focusZoomSw.html;
+  focusZoomSw.setup();
 
   // OCR panel collapse toggle
   document.getElementById('focus-ocr-header')?.addEventListener('click', () => {
@@ -12199,6 +12362,7 @@ async function loadFocusImage(index) {
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(spec.filename))}">`;
     container.querySelector('img').addEventListener('click', () => openImageModal(dataUrl));
+    applyImageZoomMode('focus-image-container', tableImageZoomMode);
   } else {
     container.innerHTML = '<div class="table-image-placeholder">No image</div>';
   }
@@ -12598,21 +12762,21 @@ function applyTypographySettings() {
     root.style.setProperty(`--fs-${base}`, `${scaled}px`);
   }
 
-  const family = APP.settings.fontFamily || 'system-sans';
+  const family = APP.settings.fontFamily || 'atkinson';
   let fontValue;
   switch (family) {
     case 'system-serif':
       fontValue = "Georgia, 'Times New Roman', Times, serif";
       break;
-    case 'atkinson':
-      fontValue = "'Atkinson Hyperlegible Next', system-ui, sans-serif";
+    case 'system-sans':
+      fontValue = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
       break;
     case 'opendyslexic':
       fontValue = "'OpenDyslexic', system-ui, sans-serif";
       break;
-    case 'system-sans':
+    case 'atkinson':
     default:
-      fontValue = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+      fontValue = "'Atkinson Hyperlegible Next', system-ui, sans-serif";
       break;
   }
   root.style.setProperty('--font', fontValue);
@@ -13248,8 +13412,8 @@ function openSettingsPopup() {
 
           <div class="settings-row">
             <div class="settings-label">
-              <div>Confirm Records Button</div>
-              <div class="settings-desc">Show a button that confirms all reviewed record values as-is for the current category</div>
+              <div>'Confirm Records' Button</div>
+              <div class="settings-desc">[Form Mode] Show a button that enables the user to confirm all Reviewed Record values as-is for the current category</div>
             </div>
             <div class="table-lock-toggle ${APP.settings.confirmRecordsEnabled !== false ? 'unlocked' : 'locked'}" id="setting-confirm-records">
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
@@ -13259,8 +13423,8 @@ function openSettingsPopup() {
 
           <div class="settings-row">
             <div class="settings-label">
-              <div>Accept VoucherVision Button</div>
-              <div class="settings-desc">Show a button that accepts all AI values at once for the current category</div>
+              <div>'Accept VoucherVision' Button</div>
+              <div class="settings-desc">[Form Mode] Show a button that enables the user to accept all VoucherVision-suggested values at once for the current category</div>
             </div>
             <div class="table-lock-toggle ${APP.settings.acceptAllEnabled ? 'unlocked' : 'locked'}" id="setting-accept-all">
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
@@ -13271,7 +13435,7 @@ function openSettingsPopup() {
           <div class="settings-row">
             <div class="settings-label">
               <div>Table Edit Lock Warning</div>
-              <div class="settings-desc">Show the warning popup when unlocking table editing</div>
+              <div class="settings-desc">[Table Mode] Show a warning popup when table editing is unlocked</div>
             </div>
             <div class="table-lock-toggle ${APP.settings.editLockWarning !== false ? 'unlocked' : 'locked'}" id="setting-edit-lock-warning">
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
@@ -13282,22 +13446,11 @@ function openSettingsPopup() {
           <div class="settings-row">
             <div class="settings-label">
               <div>Image Cache Size</div>
-              <div class="settings-desc">Number of cached images kept in memory (100–6000). Default 2000. Higher values speed up browsing large projects at the cost of more memory use.</div>
+              <div class="settings-desc">Number of cached images kept in memory (100-6000). Default 2000. Higher values speed up browsing large projects at the cost of more memory use.</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               <input type="range" min="100" max="6000" step="100" id="setting-image-cache" value="${APP.settings.imageCacheSize || 2000}" style="width:140px;accent-color:var(--accent)">
               <span id="setting-image-cache-label" style="font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-secondary);min-width:40px">${APP.settings.imageCacheSize || 2000}</span>
-            </div>
-          </div>
-
-          <div class="settings-row">
-            <div class="settings-label">
-              <div>Enable Italic Emphasis</div>
-              <div class="settings-desc">Use italics to signal provisional, empty, or informational content</div>
-            </div>
-            <div class="table-lock-toggle ${APP.settings.italicEmphasis !== false ? 'unlocked' : 'locked'}" id="setting-italic-emphasis">
-              <div class="toggle-track"><div class="toggle-thumb"></div></div>
-              <span class="table-lock-label" style="text-transform:none">${APP.settings.italicEmphasis !== false ? 'Enabled' : 'Disabled'}</span>
             </div>
           </div>
 
@@ -13384,7 +13537,7 @@ function openSettingsPopup() {
       </details>
 
       <details class="settings-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
-        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Font and Font Size</summary>
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Font &amp; Readability</summary>
         <div style="padding:4px 12px 12px">
 
           <div style="display:flex;flex-direction:column;gap:10px">
@@ -13397,7 +13550,7 @@ function openSettingsPopup() {
                     'system-serif': 'System Serif',
                     'atkinson': 'Atkinson Hyperlegible',
                     'opendyslexic': 'OpenDyslexic',
-                  })[APP.settings.fontFamily || 'system-sans']}</span>
+                  })[APP.settings.fontFamily || 'atkinson']}</span>
                   <span style="font-size:var(--fs-10);color:var(--text-muted);margin-left:8px">&#9662;</span>
                 </div>
                 <div class="font-picker-dropdown" id="font-picker-dropdown" style="display:none;position:absolute;top:100%;left:0;min-width:100%;z-index:9999;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:2px;box-shadow:var(--shadow-lg)">
@@ -13413,6 +13566,17 @@ function openSettingsPopup() {
               <label style="font-size:var(--fs-11);color:var(--text-secondary);min-width:70px">Font Scale</label>
               <input type="range" min="1.0" max="2.0" step="0.1" id="setting-font-scale" value="${APP.settings.fontScale || 1.0}" style="flex:1;max-width:200px;accent-color:var(--accent)">
               <span id="setting-font-scale-label" style="font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-secondary);min-width:36px">${(APP.settings.fontScale || 1.0).toFixed(1)}x</span>
+            </div>
+          </div>
+
+          <div class="settings-row" style="margin-top:4px">
+            <div class="settings-label">
+              <div>Enable Italic Emphasis</div>
+              <div class="settings-desc">Use italics to signal provisional, empty, or informational content</div>
+            </div>
+            <div class="table-lock-toggle ${APP.settings.italicEmphasis !== false ? 'unlocked' : 'locked'}" id="setting-italic-emphasis">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              <span class="table-lock-label" style="text-transform:none">${APP.settings.italicEmphasis !== false ? 'Enabled' : 'Disabled'}</span>
             </div>
           </div>
 
@@ -13508,7 +13672,7 @@ function openSettingsPopup() {
   };
 
   // Set initial preview font
-  fontPreview.style.fontFamily = fontFamilyStacks[APP.settings.fontFamily || 'system-sans'];
+  fontPreview.style.fontFamily = fontFamilyStacks[APP.settings.fontFamily || 'atkinson'];
 
   fontPicker.querySelector('.font-picker-selected').addEventListener('click', () => {
     fontDropdown.style.display = fontDropdown.style.display === 'none' ? 'block' : 'none';
@@ -13674,7 +13838,7 @@ async function performProjectReset() {
   updateRewindButton();
   APP.state = { version: 1, folder_path: APP.folderPath, specimens: {} };
   APP.project = null;
-  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {}, fontFamily: 'system-sans', fontScale: 1.0, italicEmphasis: true };
+  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {}, fontFamily: 'atkinson', fontScale: 1.0, italicEmphasis: true };
   APP.currentIndex = 0;
 
   // Re-load folder from scratch (re-acquires lock, validates prompt, etc.)

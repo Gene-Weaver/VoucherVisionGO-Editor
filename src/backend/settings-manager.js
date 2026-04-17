@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS = {
   },
   lastUpdateCheck: null,
   installDate: null,
-  fontFamily: 'system-sans',
+  fontFamily: 'atkinson',
   fontScale: 1.0,
   italicEmphasis: true,
 };
