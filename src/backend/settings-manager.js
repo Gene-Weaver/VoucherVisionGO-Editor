@@ -26,6 +26,9 @@ const DEFAULT_SETTINGS = {
   },
   lastUpdateCheck: null,
   installDate: null,
+  fontFamily: 'system-sans',
+  fontScale: 1.0,
+  italicEmphasis: true,
 };
 
 let appDataPath = null;

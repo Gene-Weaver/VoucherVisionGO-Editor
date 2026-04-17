@@ -299,11 +299,11 @@ function renderFolderPicker() {
       <div>&mdash; The <strong>Table</strong> and <strong>Focus</strong> modes can be used to batch edit fields and is often faster than the <strong>Form</strong> mode.</div>
     </div>
     <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:8px">
-      <label style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Reviewer Name</label>
-      <input type="text" id="picker-username" placeholder="Enter your name" style="width:280px;text-align:center;font-size:14px" value="${escapeAttr(APP.username)}">
+      <label style="font-size:var(--fs-12);color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Reviewer Name</label>
+      <input type="text" id="picker-username" placeholder="Enter your name" style="width:280px;text-align:center;font-size:var(--fs-14)" value="${escapeAttr(APP.username)}">
     </div>
     <button class="btn-primary picker-btn" id="picker-open-btn">Open Folder</button>
-    <div id="picker-error" style="color:var(--error);font-size:12px;margin-top:8px;display:none"></div>
+    <div id="picker-error" style="color:var(--error);font-size:var(--fs-12);margin-top:8px;display:none"></div>
   `;
   document.getElementById('picker-open-btn').addEventListener('click', () => {
     const nameInput = document.getElementById('picker-username');
@@ -345,8 +345,8 @@ function confirmNewUsernameAssignment(name) {
     overlay.style.cursor = 'default';
     overlay.innerHTML = `
       <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:22px 24px;max-width:440px;width:min(440px,calc(100vw - 32px));cursor:default" onclick="event.stopPropagation()">
-        <div style="font-size:14px;font-weight:600;margin-bottom:10px;color:var(--text-primary)">Assign new username?</div>
-        <div style="font-size:12px;line-height:1.6;color:var(--text-secondary);margin-bottom:16px">
+        <div style="font-size:var(--fs-14);font-weight:600;margin-bottom:10px;color:var(--text-primary)">Assign new username?</div>
+        <div style="font-size:var(--fs-12);line-height:1.6;color:var(--text-secondary);margin-bottom:16px">
           Do you want to assign <strong style="color:var(--text-primary);font-family:var(--font-mono)">${escapeHtml(name)}</strong> to this project? This username was not previously associated with this project.
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -609,6 +609,7 @@ async function loadFolder(folderPath) {
 
     // Apply UI settings
     applyThemeColors();
+    applyTypographySettings();
     document.body.classList.add('compact-view');
 
     rebuildSpecimenIndexMap();
@@ -1049,7 +1050,7 @@ function renderReviewView() {
       ${renderCaseControls('form')}
       ${renderWebSearchModule('form')}
       <div class="review-nav-jump ml-auto">
-        <span class="text-muted" style="font-size:11px">Jump to:</span>
+        <span class="text-muted" style="font-size:var(--fs-11)">Jump to:</span>
         <input type="number" min="1" max="${APP.specimens.length}" value="${APP.currentIndex + 1}" id="input-jump" style="width:60px">
         <button class="btn-sm" id="btn-jump">Go</button>
       </div>
@@ -1315,7 +1316,7 @@ function renderMap() {
   });
 
   const extraHeaderHtml = `
-    <span style="font-size:11px;color:var(--text-secondary);font-family:var(--font-mono)">${lat.toFixed(4)}, ${lng.toFixed(4)}</span>
+    <span style="font-size:var(--fs-11);color:var(--text-secondary);font-family:var(--font-mono)">${lat.toFixed(4)}, ${lng.toFixed(4)}</span>
     ${mapSwitch.html}
   `;
 
@@ -1474,7 +1475,7 @@ function initMap(lat, lng) {
     setTimeout(() => mapInstance.invalidateSize(), 100);
   } catch {
     const body = document.getElementById('map-viewer-container-body');
-    if (body) body.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:12px">Map unavailable</div>';
+    if (body) body.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:var(--fs-12)">Map unavailable</div>';
   }
 }
 
@@ -1538,7 +1539,7 @@ function renderElevationPanel() {
     return;
   }
 
-  const elevHtml = `<span style="font-size:11px;color:var(--text-secondary);margin-left:auto">${escapeHtml(String(elev))} m</span>`;
+  const elevHtml = `<span style="font-size:var(--fs-11);color:var(--text-secondary);margin-left:auto">${escapeHtml(String(elev))} m</span>`;
   makeCollapsiblePanel('elevation-panel-container', 'COP90 Elevation',
     `<div class="info-panel-body"><div class="info-row"><span class="info-row-label">Elevation</span><span class="info-row-value">${escapeHtml(String(elev))} m</span></div></div>`,
     'elevationCollapsed', elevHtml);
@@ -1562,12 +1563,12 @@ function renderPromptPanel() {
       <div class="prompt-meta-row"><span class="prompt-meta-label">Author</span><span>${escapeHtml(meta.prompt_author || '')}</span></div>
       <div class="prompt-meta-row"><span class="prompt-meta-label">Institution</span><span>${escapeHtml(meta.prompt_author_institution || '')}</span></div>
       <div class="prompt-meta-row"><span class="prompt-meta-label">LLM</span><span>${escapeHtml(meta.LLM || '')}</span></div>
-      ${meta.prompt_description ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">${escapeHtml(meta.prompt_description)}</div>` : ''}
+      ${meta.prompt_description ? `<div style="margin-top:6px;font-size:var(--fs-11);color:var(--text-muted)">${escapeHtml(meta.prompt_description)}</div>` : ''}
     </div>
     ${raw ? `<div class="scrollable-content yaml-content">${formattedYaml}</div>` : ''}
   `;
 
-  const nameLabel = `<span style="font-size:10px;color:var(--text-muted);margin-left:auto;font-family:var(--font-mono)">${escapeHtml(meta.prompt_name || APP.currentSpecimen.prompt || '')}</span>`;
+  const nameLabel = `<span style="font-size:var(--fs-10);color:var(--text-muted);margin-left:auto;font-family:var(--font-mono)">${escapeHtml(meta.prompt_name || APP.currentSpecimen.prompt || '')}</span>`;
   makeCollapsiblePanel('prompt-panel-container', 'Prompt', bodyHtml, 'promptCollapsed', nameLabel);
 }
 
@@ -2194,7 +2195,7 @@ function renderWebSearchModule(mode) {
     <div class="case-module case-module-${mode}">
       <div class="case-module-label">Web Search or ${_searchModifierKey}+G selected text</div>
       <div class="case-module-buttons">
-        <input type="text" class="web-search-input" id="web-search-input-${mode}" placeholder="Search..." style="width:140px;font-size:11px;padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary)">
+        <input type="text" class="web-search-input" id="web-search-input-${mode}" placeholder="Search..." style="width:140px;font-size:var(--fs-11);padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary)">
         <button class="btn-sm web-search-btn" data-mode="${mode}">Go</button>
       </div>
     </div>
@@ -2209,7 +2210,7 @@ function openWebSearchPopup(query) {
   overlay.style.cursor = 'default';
   const bodyHtml = isDemoMode()
     ? `
-      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--text-secondary);font-size:14px;line-height:1.5">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--text-secondary);font-size:var(--fs-14);line-height:1.5">
         In the real version, this would open a Google search for:<br><br>
         <strong style="color:var(--text-primary)">${escapeHtml(q)}</strong>
       </div>
@@ -2218,7 +2219,7 @@ function openWebSearchPopup(query) {
   overlay.innerHTML = `
     <div style="width:80vw;height:80vh;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden;cursor:default" onclick="event.stopPropagation()">
       <div style="display:flex;align-items:center;padding:8px 12px;gap:8px;border-bottom:1px solid var(--border)">
-        <span style="font-size:12px;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Search: ${escapeHtml(q)}</span>
+        <span style="font-size:var(--fs-12);color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Search: ${escapeHtml(q)}</span>
         ${popupCloseBtnHtml('web-search-close')}
       </div>
       ${bodyHtml}
@@ -2735,19 +2736,19 @@ function renderCategoryFooter() {
       ${renderStatusLegend('status-key form-status-key form-status-key-bottom')}
       <div class="category-footer-summary">
         ${allResolved
-          ? `<span class="text-success" style="font-size:12px">&#10003; ${cat.name} complete</span>`
-          : `<span class="text-muted" style="font-size:12px">${cat.fields.length - resolvedCount} of ${cat.fields.length} fields pending</span>`
+          ? `<span class="text-success" style="font-size:var(--fs-12)">&#10003; ${cat.name} complete</span>`
+          : `<span class="text-muted" style="font-size:var(--fs-12)">${cat.fields.length - resolvedCount} of ${cat.fields.length} fields pending</span>`
         }
         ${(APP.settings.confirmRecordsEnabled !== false || APP.settings.acceptAllEnabled) && catHasUnresolved
           ? `<div class="case-module" style="flex-direction:row;gap:8px;padding:4px 10px">
-              <div class="case-module-label" style="text-transform:none;letter-spacing:0;font-size:10px;white-space:nowrap">For ${escapeHtml(cat.name)}:</div>
+              <div class="case-module-label" style="text-transform:none;letter-spacing:0;font-size:var(--fs-10);white-space:nowrap">For ${escapeHtml(cat.name)}:</div>
               <div class="case-module-buttons">
                 ${APP.settings.confirmRecordsEnabled !== false ? `<button class="btn-sm" id="btn-confirm-records" style="background:#1a3a1a;color:var(--accent);border-color:var(--accent)">Confirm Records</button>` : ''}
                 ${APP.settings.acceptAllEnabled ? `<button class="btn-sm" id="btn-accept-all" style="background:#3a2020;color:var(--warning);border-color:var(--warning)">Accept VoucherVision</button>` : ''}
               </div>
             </div>`
           : ''}
-        ${allCategoriesConfirmed ? '<span class="text-success" style="font-size:12px;font-weight:600">&#10003; All categories complete</span>' : ''}
+        ${allCategoriesConfirmed ? '<span class="text-success" style="font-size:var(--fs-12);font-weight:600">&#10003; All categories complete</span>' : ''}
       </div>
     </div>
   `;
@@ -2939,13 +2940,13 @@ function showExportWarningDialog(incomplete) {
   overlay.style.justifyContent = 'center';
 
   const listItems = incomplete.map(s =>
-    `<div style="padding:3px 0;font-size:12px;font-family:var(--font-mono)"><span style="color:var(--warning);min-width:30px;display:inline-block">#${s.index}</span> ${escapeHtml(getDisplayFilename(s.filename))} <span style="color:var(--text-muted)">(${s.reason})</span></div>`
+    `<div style="padding:3px 0;font-size:var(--fs-12);font-family:var(--font-mono)"><span style="color:var(--warning);min-width:30px;display:inline-block">#${s.index}</span> ${escapeHtml(getDisplayFilename(s.filename))} <span style="color:var(--text-muted)">(${s.reason})</span></div>`
   ).join('');
 
   overlay.innerHTML = `
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:600px;max-height:80vh;overflow:auto;cursor:default" onclick="event.stopPropagation()">
-      <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--warning)">Incomplete Reviews</div>
-      <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary)">
+      <div style="font-size:var(--fs-16);font-weight:600;margin-bottom:12px;color:var(--warning)">Incomplete Reviews</div>
+      <div style="font-size:var(--fs-13);margin-bottom:12px;color:var(--text-secondary)">
         ${incomplete.length} of ${APP.specimens.length} specimens are not fully reviewed:
       </div>
       <div style="max-height:300px;overflow-y:auto;margin-bottom:16px;padding:8px;background:var(--bg-primary);border-radius:var(--radius-sm);border:1px solid var(--border)">
@@ -2986,23 +2987,23 @@ function showFinalExportWarning(incomplete) {
 
   overlay.innerHTML = `
     <div style="background:var(--bg-secondary);border:1px solid var(--error);border-radius:var(--radius);padding:24px;max-width:520px;cursor:default" onclick="event.stopPropagation()">
-      <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--error)">Export Incomplete Records</div>
-      <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
+      <div style="font-size:var(--fs-16);font-weight:600;margin-bottom:12px;color:var(--error)">Export Incomplete Records</div>
+      <div style="font-size:var(--fs-13);margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
         ${incomplete.length} specimens have a total of <strong>${totalUnreviewed}</strong> unreviewed fields.
         How should unreviewed fields be handled in the export?
       </div>
 
       <div style="margin-bottom:16px;display:flex;flex-direction:column;gap:10px">
         <div style="padding:12px;border:2px solid var(--accent);border-radius:var(--radius);background:rgba(46,204,113,0.08);cursor:pointer" id="option-blank">
-          <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:4px">Leave unreviewed fields blank (Recommended)</div>
-          <div style="font-size:11px;color:var(--text-muted);line-height:1.4">
+          <div style="font-size:var(--fs-13);font-weight:600;color:var(--accent);margin-bottom:4px">Leave unreviewed fields blank (Recommended)</div>
+          <div style="font-size:var(--fs-11);color:var(--text-muted);line-height:1.4">
             Unreviewed fields will be exported as empty strings. This preserves the zero-trust workflow — only values you have explicitly confirmed will appear in the output.
           </div>
         </div>
 
         <div style="padding:12px;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer" id="option-populate">
-          <div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:4px">Populate with VoucherVision suggestions</div>
-          <div style="font-size:11px;color:var(--text-muted);line-height:1.4">
+          <div style="font-size:var(--fs-13);font-weight:600;color:var(--warning);margin-bottom:4px">Populate with VoucherVision suggestions</div>
+          <div style="font-size:var(--fs-11);color:var(--text-muted);line-height:1.4">
             Unreviewed fields will be filled with VoucherVision's original values. These values have <strong>not</strong> been verified by a human reviewer. Use with caution.
           </div>
         </div>
@@ -4399,14 +4400,14 @@ function toggleTableLock() {
 
     overlay.innerHTML = `
       <div style="background:var(--bg-secondary);border:1px solid var(--warning);border-radius:var(--radius);padding:24px;max-width:480px;cursor:default" onclick="event.stopPropagation()">
-        <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--warning)">&#9888; Enable Table Editing</div>
-        <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.8">
+        <div style="font-size:var(--fs-16);font-weight:600;margin-bottom:12px;color:var(--warning)">&#9888; Enable Table Editing</div>
+        <div style="font-size:var(--fs-13);margin-bottom:12px;color:var(--text-secondary);line-height:1.8">
           <div style="margin-bottom:4px"><strong>Click</strong> a cell to open it for editing.</div>
           <div style="margin-bottom:4px"><strong>Enter</strong> confirms the value into the reviewed record.</div>
           <div style="margin-bottom:4px"><strong>Tab</strong> or <strong>clicking away</strong> without Enter leaves the cell as an <strong style="color:var(--warning)">Unconfirmed Change</strong> (orange outline).</div>
           <div style="margin-bottom:4px"><strong>Escape</strong> discards changes and reverts to the original value.</div>
         </div>
-        <div style="font-size:12px;margin-bottom:16px;color:var(--text-muted);line-height:1.6">
+        <div style="font-size:var(--fs-12);margin-bottom:16px;color:var(--text-muted);line-height:1.6">
           Lock the table when you are done editing to prevent accidental changes.
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -4723,7 +4724,7 @@ async function renderFocusView() {
               </div>
             </div>
             <div class="collapsible-body ${APP.focusOcrCollapsed ? 'collapsed' : ''}" id="focus-ocr-body">
-              <div class="scrollable-content ocr-text" id="focus-ocr-text" style="max-height:200px;overflow:auto;padding:8px 10px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary)">Select a specimen to view OCR text</div>
+              <div class="scrollable-content ocr-text" id="focus-ocr-text" style="max-height:200px;overflow:auto;padding:8px 10px;font-size:var(--fs-11);white-space:pre-wrap;word-break:break-word;color:var(--text-secondary)">Select a specimen to view OCR text</div>
             </div>
           </div>
         </div>
@@ -4893,7 +4894,7 @@ function showConfirmAllPopup(field) {
   overlay.innerHTML = `
     <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:450px;cursor:default" onclick="event.stopPropagation()">
       ${popupCloseBtnHtml('confirm-all-close', 'Close', true)}
-      <div style="font-size:13px;margin-bottom:16px;color:var(--text-secondary);line-height:1.6;padding-right:24px">
+      <div style="font-size:var(--fs-13);margin-bottom:16px;color:var(--text-secondary);line-height:1.6;padding-right:24px">
         Are you sure that you want to accept the current values for all entries in the <strong style="color:var(--text-primary)">${escapeHtml(field)}</strong> field?
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -5272,8 +5273,8 @@ function showApplyCancelPopup(title, bodyHtml, onApply, applyLabel = 'Apply') {
   overlay.innerHTML = `
     <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:460px;width:min(460px,calc(100vw - 32px));cursor:default" onclick="event.stopPropagation()">
       ${popupCloseBtnHtml('apply-cancel-popup-close', 'Close', true)}
-      <div style="font-size:14px;font-weight:600;margin-bottom:12px;padding-right:24px">${title}</div>
-      <div style="font-size:12px;line-height:1.6;color:var(--text-secondary);margin-bottom:16px">${bodyHtml}</div>
+      <div style="font-size:var(--fs-14);font-weight:600;margin-bottom:12px;padding-right:24px">${title}</div>
+      <div style="font-size:var(--fs-12);line-height:1.6;color:var(--text-secondary);margin-bottom:16px">${bodyHtml}</div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn-sm" id="apply-cancel-popup-cancel">Cancel</button>
         <button class="btn-sm btn-primary" id="apply-cancel-popup-apply">${applyLabel}</button>
@@ -7040,7 +7041,7 @@ function showCatalogPatternReviewPopup(selectedField = '') {
   });
 
   const patternActionButtons = (patternIndex) => `
-    <button class="btn-icon" data-pattern-confirm="${patternIndex}" title="Mark this pattern bin as unconfirmed" style="font-size:14px;color:var(--accent);padding:0 2px">&#10003;</button>
+    <button class="btn-icon" data-pattern-confirm="${patternIndex}" title="Mark this pattern bin as unconfirmed" style="font-size:var(--fs-14);color:var(--accent);padding:0 2px">&#10003;</button>
   `;
 
   const getDraftValue = (item) => draftValues.has(item.filename) ? draftValues.get(item.filename) : item.value;
@@ -9131,13 +9132,13 @@ function renderStandardizeSection() {
             ${preview.slice(0, 20).map(p => `
               <div class="std-preview-row">
                 <span class="spec-filename" style="min-width:100px">${escapeHtml(getDisplayFilename(p.filename, 20))}</span>
-                <span style="font-size:10px;color:var(--text-muted)">${escapeHtml(p.field)}</span>
+                <span style="font-size:var(--fs-10);color:var(--text-muted)">${escapeHtml(p.field)}</span>
                 <span class="std-old-val">${escapeHtml(p.oldVal)}</span>
                 <span style="color:var(--text-muted)">→</span>
                 <span class="std-new-val">${escapeHtml(p.newVal)}</span>
               </div>
             `).join('')}
-            ${preview.length > 20 ? `<div style="padding:4px 12px;font-size:10px;color:var(--text-muted)">…and ${preview.length - 20} more</div>` : ''}
+            ${preview.length > 20 ? `<div style="padding:4px 12px;font-size:var(--fs-10);color:var(--text-muted)">…and ${preview.length - 20} more</div>` : ''}
           </div>
         ` : ''}
       </div>
@@ -10563,12 +10564,12 @@ function renderElevationDiscrepancySection() {
     </div>
     ${items.map(item => `
       <div class="focus-specimen-row focus-clickable-row" data-index="${item.index}">
-        <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
+        <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
         <span class="spec-filename">${escapeHtml(getDisplayFilename(item.filename))}</span>
-        <span style="font-size:10px;color:var(--text-muted);min-width:60px;text-align:right">${escapeHtml(item.field)}</span>
-        <span style="font-family:var(--font-mono);font-size:11px;min-width:60px;text-align:right">${item.value}</span>
-        <span style="font-family:var(--font-mono);font-size:11px;min-width:60px;text-align:right;color:var(--text-muted)">${item.cop90}</span>
-        <span style="font-family:var(--font-mono);font-size:11px;min-width:50px;text-align:right">${item.diff}m</span>
+        <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:60px;text-align:right">${escapeHtml(item.field)}</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-11);min-width:60px;text-align:right">${item.value}</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-11);min-width:60px;text-align:right;color:var(--text-muted)">${item.cop90}</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-11);min-width:50px;text-align:right">${item.diff}m</span>
         <span class="elev-status ${item.statusCls}">${item.status}</span>
       </div>
     `).join('')}
@@ -10681,7 +10682,7 @@ function renderFocusMain() {
       <div class="resize-handle focus-inline-resize" id="focus-top-row-resize"></div>
       ${fixedSection('specimens', 'Specimens', focusFilter !== null ? ' &middot; filtered' : '', `
         <div class="focus-specimens-list" id="focus-specimens-list"></div>
-      `, '<span style="flex:1"></span><span style="font-size:9px;font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">Click text to edit</span>')}
+      `, '<span style="flex:1"></span><span style="font-size:var(--fs-9);font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">Click text to edit</span>')}
     </div>
 
     <div class="focus-v-resize" id="focus-v-resize-top" data-above="focus-row-0" data-below="focus-tools-area"></div>
@@ -10991,7 +10992,7 @@ function renderDeferredClusters(fieldValues) {
           ${c.variants.map(v => `<span class="cluster-chip" data-filter-value="${escapeAttr(v.value)}" style="cursor:pointer" title="Click to filter">${escapeHtml(v.value)}<span class="chip-count">&times;${v.count}</span></span>`).join('')}
         </div>
         <div class="cluster-merge-row">
-          <span style="font-size:11px;color:var(--text-muted)">Merge to:</span>
+          <span style="font-size:var(--fs-11);color:var(--text-muted)">Merge to:</span>
           <input type="text" class="cluster-merge-input" id="cluster-input-${ci}" value="${escapeAttr(c.bestValue)}">
           <button class="btn-sm btn-primary" data-cluster="${ci}">Merge</button>
         </div>
@@ -11151,18 +11152,18 @@ function renderDeferredDates(fieldValues) {
       return `
         <div style="border-bottom:1px solid var(--border)" data-bin-group="${fi}" data-bin-items='${binIndices}'>
           <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary)">
-            <span style="font-family:var(--font-mono);font-size:11px;font-weight:600;color:${isDominant ? 'var(--text-primary)' : 'var(--warning)'}">${escapeHtml(f.pattern)}</span>
+            <span style="font-family:var(--font-mono);font-size:var(--fs-11);font-weight:600;color:${isDominant ? 'var(--text-primary)' : 'var(--warning)'}">${escapeHtml(f.pattern)}</span>
             <div class="facet-bar-container"><div class="facet-bar" style="width:${(f.count / dateFormats.maxCount) * 100}%"></div></div>
-            <span style="font-size:10px;color:var(--text-muted)">${f.count}</span>
-            ${!isDominant ? '<span style="font-size:9px;color:var(--warning)">minority</span>' : ''}
+            <span style="font-size:var(--fs-10);color:var(--text-muted)">${f.count}</span>
+            ${!isDominant ? '<span style="font-size:var(--fs-9);color:var(--warning)">minority</span>' : ''}
             <span style="flex:1"></span>
-            <button class="btn-icon bin-confirm-btn" data-bin="${fi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:14px;color:var(--accent);padding:0 2px">&#10003;</button>
-            <button class="btn-icon bin-uncertain-btn" data-bin="${fi}" title="Clear unconfirmed status for all in bin" style="font-size:14px;color:var(--text-muted);padding:0 2px">&#8635;</button>
+            <button class="btn-icon bin-confirm-btn" data-bin="${fi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:var(--fs-14);color:var(--accent);padding:0 2px">&#10003;</button>
+            <button class="btn-icon bin-uncertain-btn" data-bin="${fi}" title="Clear unconfirmed status for all in bin" style="font-size:var(--fs-14);color:var(--text-muted);padding:0 2px">&#8635;</button>
           </div>
           <div>
             ${f.items.map(item => `
               <div class="focus-specimen-row focus-clickable-row" data-index="${item.index}" style="padding:2px 12px 2px 24px">
-                <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
+                <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
                 ${binStatusSquareHtml(item.index, focusField)}
                 <span class="spec-filename">${escapeHtml(getDisplayFilename(item.filename))}</span>
                 <span class="spec-value focus-editable-cell" data-index="${item.index}" data-field="${escapeAttr(focusField)}" style="${!isDominant ? 'color:var(--accent)' : ''}">${escapeHtml(item.value)}</span>
@@ -11218,20 +11219,20 @@ function renderDeferredDateViolations(fieldValues) {
     return `
       <div style="border-bottom:1px solid var(--border)" data-bin-group="${bi}" data-bin-items='${binIndices}'>
         <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary)">
-          <span style="font-family:var(--font-mono);font-size:11px;font-weight:600;color:${color}">${title}</span>
-          <span style="font-size:10px;color:var(--text-muted)">${items.length}</span>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-11);font-weight:600;color:${color}">${title}</span>
+          <span style="font-size:var(--fs-10);color:var(--text-muted)">${items.length}</span>
           <span style="flex:1"></span>
-          <button class="btn-icon bin-confirm-btn" data-bin="${bi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:14px;color:var(--accent);padding:0 2px">&#10003;</button>
-          <button class="btn-icon bin-uncertain-btn" data-bin="${bi}" title="Clear unconfirmed status for all in bin" style="font-size:14px;color:var(--text-muted);padding:0 2px">&#8635;</button>
+          <button class="btn-icon bin-confirm-btn" data-bin="${bi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:var(--fs-14);color:var(--accent);padding:0 2px">&#10003;</button>
+          <button class="btn-icon bin-uncertain-btn" data-bin="${bi}" title="Clear unconfirmed status for all in bin" style="font-size:var(--fs-14);color:var(--text-muted);padding:0 2px">&#8635;</button>
         </div>
         <div>
           ${items.map(item => `
             <div class="focus-specimen-row focus-clickable-row" data-index="${item.index}" style="padding:2px 12px 2px 24px">
-              <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
+              <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
               ${binStatusSquareHtml(item.index, focusField)}
               <span class="spec-filename">${escapeHtml(getDisplayFilename(item.filename))}</span>
               <span class="spec-value focus-editable-cell" data-index="${item.index}" data-field="${escapeAttr(focusField)}" style="color:var(--accent)">${escapeHtml(item.value)}</span>
-              <span style="font-size:9px;color:var(--text-muted);margin-left:auto">${escapeHtml(item.detail)}</span>
+              <span style="font-size:var(--fs-9);color:var(--text-muted);margin-left:auto">${escapeHtml(item.detail)}</span>
             </div>
           `).join('')}
         </div>
@@ -11285,7 +11286,7 @@ function renderDeferredPatterns(fieldValues) {
     container.innerHTML = `
       <div style="padding:12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;background:var(--bg-tertiary)">
         <button class="btn-sm btn-primary" id="btn-open-gap-check" ${hasSequencePatterns ? '' : 'disabled'}>Check for gaps in sequence</button>
-        <span style="font-size:11px;color:var(--text-muted)">
+        <span style="font-size:var(--fs-11);color:var(--text-muted)">
           ${sequenceSummary}
         </span>
       </div>
@@ -11295,7 +11296,7 @@ function renderDeferredPatterns(fieldValues) {
     container.innerHTML = `
       <div style="padding:12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;background:var(--bg-tertiary)">
         <button class="btn-sm btn-primary" id="btn-open-gap-check" ${hasSequencePatterns ? '' : 'disabled'}>Check for gaps in sequence</button>
-        <span style="font-size:11px;color:var(--text-muted)">
+        <span style="font-size:var(--fs-11);color:var(--text-muted)">
           ${sequenceSummary}
         </span>
       </div>
@@ -11305,17 +11306,17 @@ function renderDeferredPatterns(fieldValues) {
         return `
           <div style="border-bottom:1px solid var(--border)" data-bin-group="${pi}" data-bin-items='${binIndices}'>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary)">
-              <span style="font-family:var(--font-mono);font-size:11px;font-weight:600;color:${isDominant ? 'var(--text-primary)' : 'var(--warning)'}">${escapeHtml(p.pattern)}</span>
-              <span style="font-size:10px;color:var(--text-muted)">(e.g. ${escapeHtml(p.example)})</span>
+              <span style="font-family:var(--font-mono);font-size:var(--fs-11);font-weight:600;color:${isDominant ? 'var(--text-primary)' : 'var(--warning)'}">${escapeHtml(p.pattern)}</span>
+              <span style="font-size:var(--fs-10);color:var(--text-muted)">(e.g. ${escapeHtml(p.example)})</span>
               <div class="facet-bar-container" style="margin-left:auto"><div class="facet-bar" style="width:${(p.count / catalogPatterns.maxCount) * 100}%"></div></div>
-              <span style="font-size:10px;color:var(--text-muted)">${p.count}</span>
-              <button class="btn-icon bin-confirm-btn" data-bin="${pi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:14px;color:var(--accent);padding:0 2px">&#10003;</button>
-              <button class="btn-icon bin-uncertain-btn" data-bin="${pi}" title="Clear unconfirmed status for all in bin" style="font-size:14px;color:var(--text-muted);padding:0 2px">&#8635;</button>
+              <span style="font-size:var(--fs-10);color:var(--text-muted)">${p.count}</span>
+              <button class="btn-icon bin-confirm-btn" data-bin="${pi}" title="Mark all in bin as unconfirmed (for review)" style="font-size:var(--fs-14);color:var(--accent);padding:0 2px">&#10003;</button>
+              <button class="btn-icon bin-uncertain-btn" data-bin="${pi}" title="Clear unconfirmed status for all in bin" style="font-size:var(--fs-14);color:var(--text-muted);padding:0 2px">&#8635;</button>
             </div>
             <div>
               ${p.items.map(item => `
                 <div class="focus-specimen-row focus-clickable-row" data-index="${item.index}" style="padding:2px 12px 2px 24px">
-                  <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
+                  <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:24px">#${item.index + 1}</span>
                   ${binStatusSquareHtml(item.index, focusField)}
                   <span class="spec-filename">${escapeHtml(getDisplayFilename(item.filename))}</span>
                   <span class="spec-value focus-editable-cell" data-index="${item.index}" data-field="${escapeAttr(focusField)}" style="${!isDominant ? 'color:var(--accent)' : ''}">${escapeHtml(item.value)}</span>
@@ -11643,7 +11644,7 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
       </div>
       <div class="name-parser-summary">
         <span>${escapeHtml(summary)}</span>
-        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">${escapeHtml(field)}</span>
+        <span style="font-family:var(--font-mono);font-size:var(--fs-11);color:var(--text-muted)">${escapeHtml(field)}</span>
       </div>
       <div class="name-parser-list" id="gap-list"></div>
     </div>
@@ -11660,11 +11661,11 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
     listEl.innerHTML = analysis.groups.map(group => `
       <div style="border-bottom:1px solid var(--border)">
         <div style="padding:10px 20px;background:var(--bg-tertiary);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-primary);font-weight:600">${escapeHtml(group.example)}</span>
-          ${group.start !== null && group.end !== null ? `<span style="font-size:10px;color:var(--text-muted)">Range ${group.start}–${group.end}</span>` : ''}
-          <span style="font-size:10px;color:var(--text-muted)">${group.uniqueCount} present</span>
-          <span style="font-size:10px;color:${group.missingCount > 0 ? 'var(--warning)' : 'var(--text-muted)'}">${group.missingCount} missing</span>
-          <span style="font-size:10px;color:${group.duplicateEntries > 0 ? 'var(--warning)' : 'var(--text-muted)'}">${group.duplicateEntries} duplicate entr${group.duplicateEntries === 1 ? 'y' : 'ies'}</span>
+          <span style="font-family:var(--font-mono);font-size:var(--fs-11);color:var(--text-primary);font-weight:600">${escapeHtml(group.example)}</span>
+          ${group.start !== null && group.end !== null ? `<span style="font-size:var(--fs-10);color:var(--text-muted)">Range ${group.start}–${group.end}</span>` : ''}
+          <span style="font-size:var(--fs-10);color:var(--text-muted)">${group.uniqueCount} present</span>
+          <span style="font-size:var(--fs-10);color:${group.missingCount > 0 ? 'var(--warning)' : 'var(--text-muted)'}">${group.missingCount} missing</span>
+          <span style="font-size:var(--fs-10);color:${group.duplicateEntries > 0 ? 'var(--warning)' : 'var(--text-muted)'}">${group.duplicateEntries} duplicate entr${group.duplicateEntries === 1 ? 'y' : 'ies'}</span>
         </div>
         ${group.missingCount === 0 && group.duplicateEntries === 0 ? `
           <div class="focus-no-clusters" style="padding:16px">No gaps or duplicates in this sequence</div>
@@ -11678,7 +11679,7 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
             ${group.missingValues.map(value => `
               <div class="name-parser-row" style="padding:4px 20px">
                 <span class="np-filename" style="min-width:60px;max-width:60px">missing</span>
-                <span style="font-family:var(--font-mono);font-size:11px;color:var(--warning)">${escapeHtml(value)}</span>
+                <span style="font-family:var(--font-mono);font-size:var(--fs-11);color:var(--warning)">${escapeHtml(value)}</span>
               </div>
             `).join('')}
             ${group.truncated ? `
@@ -11695,8 +11696,8 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
               <div class="name-parser-row" style="padding:4px 20px;align-items:flex-start">
                 <span class="np-filename" style="min-width:60px;max-width:60px">duplicate</span>
                 <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
-                  <span style="font-family:var(--font-mono);font-size:11px;color:var(--warning)">${escapeHtml(item.value)} <span style="color:var(--text-muted)">x${item.count}</span></span>
-                  <span style="font-size:10px;color:var(--text-muted)">${escapeHtml(item.filenames.join(', '))}</span>
+                  <span style="font-family:var(--font-mono);font-size:var(--fs-11);color:var(--warning)">${escapeHtml(item.value)} <span style="color:var(--text-muted)">x${item.count}</span></span>
+                  <span style="font-size:var(--fs-10);color:var(--text-muted)">${escapeHtml(item.filenames.join(', '))}</span>
                 </div>
               </div>
             `).join('')}
@@ -11750,7 +11751,7 @@ function renderFocusSpecimens(cachedFieldValues) {
     const isFlagged = APP.state.specimens[v.filename]?.flagged;
     return `
       <div class="focus-specimen-row focus-clickable-row" data-index="${v.index}">
-        <span style="font-size:10px;color:var(--text-muted);min-width:24px">#${v.index + 1}</span>
+        <span style="font-size:var(--fs-10);color:var(--text-muted);min-width:24px">#${v.index + 1}</span>
         <span class="focus-flag ${isFlagged ? 'flagged' : ''}" data-index="${v.index}" data-file="${escapeAttr(v.filename)}" data-tool="focus" title="${isFlagged ? 'Unflag specimen' : 'Flag specimen'}">${flagAndTagHtml(v.filename, 12, 'focus')}</span>
         <span class="focus-goto" data-index="${v.index}" title="Open in form view"><img src="icons/goto.svg" style="width:12px;height:12px;filter:brightness(0) invert(1);opacity:0.6"></span>
         <span class="focus-flair" style="background:${flairColor}"></span>
@@ -12004,7 +12005,7 @@ function renderOcrComparisonSection() {
 
   const idx = tableSelectedIndex;
   if (idx < 0 || idx >= APP.specimens.length || !focusField) {
-    container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Select a specimen to compare</div>';
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:var(--fs-12)">Select a specimen to compare</div>';
     return;
   }
 
@@ -12014,7 +12015,7 @@ function renderOcrComparisonSection() {
   const ocrLookup = getOcrLookupForSpecimen(idx);
   const highlightCacheKey = `${APP.folderPath}|${spec.filename}|${focusField}|${value}`;
   const valHtml = value === ''
-    ? '<span class="cell-empty-placeholder" style="font-size:17px">(empty)</span>'
+    ? '<span class="cell-empty-placeholder" style="font-size:var(--fs-17)">(empty)</span>'
     : (_ocrHighlightCache.get(highlightCacheKey)
       || (() => {
         const html = highlightNonOcrWords(value, ocrLookup);
@@ -12041,12 +12042,12 @@ function renderOcrComparisonSection() {
 
   container.innerHTML = `
     <div class="ocr-compare-header">
-      <span style="font-size:10px;color:var(--text-muted)">#${idx + 1}</span>
-      <span style="font-size:11px;color:var(--cat-0);font-weight:500">${escapeHtml(getDisplayFilename(spec.filename))}</span>
-      <span class="field-status ${statusClass}" style="font-size:10px;margin-left:4px">${statusLabel}</span>
+      <span style="font-size:var(--fs-10);color:var(--text-muted)">#${idx + 1}</span>
+      <span style="font-size:var(--fs-11);color:var(--cat-0);font-weight:500">${escapeHtml(getDisplayFilename(spec.filename))}</span>
+      <span class="field-status ${statusClass}" style="font-size:var(--fs-10);margin-left:4px">${statusLabel}</span>
       <span style="flex:1"></span>
-      <button class="btn-icon ocr-confirm-btn" title="Confirm current value" style="font-size:14px;color:var(--accent)">&#10003;</button>
-      ${!isUnconfirmed ? `<button class="btn-icon ocr-uncertain-btn" title="Set status to Unconfirmed Change" style="font-size:14px;color:var(--text-muted)">&#8635;</button>` : ''}
+      <button class="btn-icon ocr-confirm-btn" title="Confirm current value" style="font-size:var(--fs-14);color:var(--accent)">&#10003;</button>
+      ${!isUnconfirmed ? `<button class="btn-icon ocr-uncertain-btn" title="Set status to Unconfirmed Change" style="font-size:var(--fs-14);color:var(--text-muted)">&#8635;</button>` : ''}
     </div>
     <div class="ocr-compare-content ocr-compare-cell" id="ocr-compare-editable" contenteditable="true" data-index="${idx}" data-field="${escapeAttr(focusField)}">${valHtml}</div>
   `;
@@ -12216,7 +12217,7 @@ function startFocusCellEdit(cell, specimenIndex, fieldName) {
   cell.style.whiteSpace = 'normal';
   cell.style.overflow = 'visible';
   cell.style.textOverflow = 'unset';
-  cell.innerHTML = `<textarea class="cell-edit-input" data-index="${specimenIndex}" data-field="${escapeAttr(fieldName)}" style="font-size:11px;padding:2px 4px;width:100%;resize:vertical;min-height:1.6em;font-family:var(--font-mono);line-height:1.4">${escapeHtml(currentValue)}</textarea>`;
+  cell.innerHTML = `<textarea class="cell-edit-input" data-index="${specimenIndex}" data-field="${escapeAttr(fieldName)}" style="font-size:var(--fs-11);padding:2px 4px;width:100%;resize:vertical;min-height:1.6em;font-family:var(--font-mono);line-height:1.4">${escapeHtml(currentValue)}</textarea>`;
   const input = cell.querySelector('textarea');
   // Auto-size to content
   input.style.height = input.scrollHeight + 'px';
@@ -12587,6 +12588,39 @@ function applyThemeColors() {
   root.style.setProperty('--cat-misc', cc.catMisc || '#888888');
 }
 
+function applyTypographySettings() {
+  const root = document.documentElement;
+  const scale = APP.settings.fontScale || 1.0;
+  const baseSizes = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 24, 32];
+
+  for (const base of baseSizes) {
+    const scaled = Math.max(base, Math.round(base * scale));
+    root.style.setProperty(`--fs-${base}`, `${scaled}px`);
+  }
+
+  const family = APP.settings.fontFamily || 'system-sans';
+  let fontValue;
+  switch (family) {
+    case 'system-serif':
+      fontValue = "Georgia, 'Times New Roman', Times, serif";
+      break;
+    case 'atkinson':
+      fontValue = "'Atkinson Hyperlegible Next', system-ui, sans-serif";
+      break;
+    case 'opendyslexic':
+      fontValue = "'OpenDyslexic', system-ui, sans-serif";
+      break;
+    case 'system-sans':
+    default:
+      fontValue = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+      break;
+  }
+  root.style.setProperty('--font', fontValue);
+
+  // Italic emphasis
+  root.style.setProperty('--italic', APP.settings.italicEmphasis !== false ? 'italic' : 'normal');
+}
+
 function timeAgo(isoString) {
   const diff = Date.now() - new Date(isoString).getTime();
   const mins = Math.floor(diff / 60000);
@@ -12603,8 +12637,8 @@ function showUpdateNotification(data) {
   const toast = document.createElement('div');
   toast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:21px 27px;z-index:10000;box-shadow:0 6px 30px rgba(0,0,0,0.5);max-width:510px;cursor:pointer;pointer-events:auto';
   toast.innerHTML = `
-    <div style="font-size:20px;font-weight:600;color:var(--text-primary);margin-bottom:6px">Update Available: v${escapeHtml(data.version)}</div>
-    <div style="font-size:16px;color:var(--text-muted)">Open Settings to update</div>
+    <div style="font-size:var(--fs-20);font-weight:600;color:var(--text-primary);margin-bottom:6px">Update Available: v${escapeHtml(data.version)}</div>
+    <div style="font-size:var(--fs-16);color:var(--text-muted)">Open Settings to update</div>
   `;
   toast.addEventListener('click', () => { toast.remove(); openSettingsPopup(); });
   document.body.appendChild(toast);
@@ -12628,7 +12662,7 @@ function updateSettingsUpdateUI(data) {
       if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
       break;
     case 'available-manual':
-      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span><br><span style="color:var(--text-muted);font-size:11px">Portable build — download from GitHub Releases</span>`;
+      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span><br><span style="color:var(--text-muted);font-size:var(--fs-11)">Portable build — download from GitHub Releases</span>`;
       if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
       break;
     case 'up-to-date':
@@ -12716,7 +12750,7 @@ function openFlaggedSpecimensPopup() {
     overlay.innerHTML = `
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:720px;width:min(720px,calc(100vw - 32px));max-height:80vh;display:flex;flex-direction:column;cursor:default" onclick="event.stopPropagation()">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-          <span style="font-size:14px;font-weight:600;color:var(--text-error);display:inline-flex;align-items:center;gap:6px">${flagIconSvg(true, 16)} ${count} Flagged Specimen${count !== 1 ? 's' : ''}</span>
+          <span style="font-size:var(--fs-14);font-weight:600;color:var(--text-error);display:inline-flex;align-items:center;gap:6px">${flagIconSvg(true, 16)} ${count} Flagged Specimen${count !== 1 ? 's' : ''}</span>
           ${popupCloseBtnHtml('flagged-popup-close')}
         </div>
         <div class="flagged-popup-key">
@@ -12860,7 +12894,7 @@ function openChecklistPopup() {
   overlay.innerHTML = `
     <div class="checklist-popup" onclick="event.stopPropagation()">
       <div class="checklist-header">
-        <span style="font-weight:600;font-size:14px">Checklist</span>
+        <span style="font-weight:600;font-size:var(--fs-14)">Checklist</span>
         <span style="flex:1"></span>
         ${popupCloseBtnHtml('checklist-close')}
       </div>
@@ -13185,138 +13219,210 @@ function openSettingsPopup() {
     <div class="settings-popup" onclick="event.stopPropagation()">
       <div class="settings-header">
         <div class="settings-header-side">
-          <span style="font-size:16px;font-weight:600;color:var(--text-primary)">&#9881; Settings</span>
+          <span style="font-size:var(--fs-16);font-weight:600;color:var(--text-primary)">&#9881; Settings</span>
         </div>
         <div class="settings-header-center">
           <button class="btn-sm btn-primary" id="settings-export-project">Export Project</button>
         </div>
         <div class="settings-header-side settings-header-side-right">
-          <span style="display:flex;align-items:center;gap:6px;padding:3px 10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-muted);font-size:11px;font-family:var(--font-mono)">&#9998; ${escapeHtml(APP.username)}</span>
+          <span style="display:flex;align-items:center;gap:6px;padding:3px 10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-muted);font-size:var(--fs-11);font-family:var(--font-mono)">&#9998; ${escapeHtml(APP.username)}</span>
           ${popupCloseBtnHtml('settings-close-top')}
         </div>
       </div>
 
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Confirm Records Button</div>
-          <div class="settings-desc">Show a button that confirms all reviewed record values as-is for the current category</div>
+      <div style="flex:1;overflow-y:auto;padding:0 2px">
+
+      <!-- ── Top: two-column layout ── -->
+      <div style="display:flex;gap:20px;margin-bottom:16px">
+
+        <!-- Left column -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:0">
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Progress Tracker</div>
+              <div class="settings-desc">Supervisor summary of reviewer activity, sessions, cells reviewed, and specimens touched for this project</div>
+            </div>
+            <button class="btn-sm" id="btn-open-progress-tracker">Open Tracker</button>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Confirm Records Button</div>
+              <div class="settings-desc">Show a button that confirms all reviewed record values as-is for the current category</div>
+            </div>
+            <div class="table-lock-toggle ${APP.settings.confirmRecordsEnabled !== false ? 'unlocked' : 'locked'}" id="setting-confirm-records">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              <span class="table-lock-label" style="text-transform:none">${APP.settings.confirmRecordsEnabled !== false ? 'Enabled' : 'Disabled'}</span>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Accept VoucherVision Button</div>
+              <div class="settings-desc">Show a button that accepts all AI values at once for the current category</div>
+            </div>
+            <div class="table-lock-toggle ${APP.settings.acceptAllEnabled ? 'unlocked' : 'locked'}" id="setting-accept-all">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              <span class="table-lock-label" style="text-transform:none">${APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Table Edit Lock Warning</div>
+              <div class="settings-desc">Show the warning popup when unlocking table editing</div>
+            </div>
+            <div class="table-lock-toggle ${APP.settings.editLockWarning !== false ? 'unlocked' : 'locked'}" id="setting-edit-lock-warning">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              <span class="table-lock-label" style="text-transform:none">${APP.settings.editLockWarning !== false ? 'Enabled' : 'Disabled'}</span>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Image Cache Size</div>
+              <div class="settings-desc">Number of cached images kept in memory (100–6000). Default 2000. Higher values speed up browsing large projects at the cost of more memory use.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="range" min="100" max="6000" step="100" id="setting-image-cache" value="${APP.settings.imageCacheSize || 2000}" style="width:140px;accent-color:var(--accent)">
+              <span id="setting-image-cache-label" style="font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-secondary);min-width:40px">${APP.settings.imageCacheSize || 2000}</span>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-label">
+              <div>Enable Italic Emphasis</div>
+              <div class="settings-desc">Use italics to signal provisional, empty, or informational content</div>
+            </div>
+            <div class="table-lock-toggle ${APP.settings.italicEmphasis !== false ? 'unlocked' : 'locked'}" id="setting-italic-emphasis">
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+              <span class="table-lock-label" style="text-transform:none">${APP.settings.italicEmphasis !== false ? 'Enabled' : 'Disabled'}</span>
+            </div>
+          </div>
+
         </div>
-        <div class="table-lock-toggle ${APP.settings.confirmRecordsEnabled !== false ? 'unlocked' : 'locked'}" id="setting-confirm-records">
-          <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span class="table-lock-label" style="text-transform:none">${APP.settings.confirmRecordsEnabled !== false ? 'Enabled' : 'Disabled'}</span>
+
+        <!-- Right column -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:0">
+
+          <div class="settings-row" id="settings-update-section" style="flex-direction:column;align-items:stretch">
+            <div class="settings-label" style="margin-bottom:10px">
+              <div>Updates</div>
+              <div class="settings-desc">Check for new versions of VoucherVisionGO Editor</div>
+            </div>
+            <div id="update-info-container" style="font-size:var(--fs-12);color:var(--text-secondary);line-height:1.8">
+              <div>Current version: <span id="update-current-version" style="font-family:var(--font-mono);color:var(--text-primary)">...</span></div>
+              <div>Installed: <span id="update-install-date" style="color:var(--text-muted)">...</span></div>
+              <div>Last checked: <span id="update-last-check" style="color:var(--text-muted)">...</span></div>
+              <div id="update-status-line" style="margin-top:6px"></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+              <button class="btn-sm btn-primary" id="btn-check-update" style="font-size:var(--fs-11)">Check for Updates</button>
+              <button class="btn-sm" id="btn-download-update" style="font-size:var(--fs-11);display:none">Download Update</button>
+              <button class="btn-sm" id="btn-install-update" style="font-size:var(--fs-11);display:none;background:#1a5c1a;color:#4caf50;border-color:#4caf50">Restart to Update</button>
+              <a id="btn-github-releases" href="#" style="font-size:var(--fs-11);color:var(--accent);text-decoration:none;margin-left:auto">View releases on GitHub &#x2197;</a>
+            </div>
+          </div>
+
         </div>
+
       </div>
 
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Accept VoucherVision Button</div>
-          <div class="settings-desc">Show a button that accepts all AI values at once for the current category</div>
+      <!-- ── Bottom: full-width expanders ── -->
+
+      <details class="settings-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Accent Colors</summary>
+        <div style="padding:4px 12px 12px">
+
+          <div class="settings-row" style="flex-direction:column;align-items:stretch">
+            <div class="settings-label" style="margin-bottom:8px">
+              <div>Row Colors (Gray)</div>
+              <div class="settings-desc">Alternating background shades for form and table rows</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:var(--fs-11);color:var(--text-secondary);flex:1">
+                Odd
+                <input type="range" min="0" max="120" id="setting-row-odd" value="${hexToGray(APP.settings.rowColorOdd)}" style="flex:1;accent-color:var(--accent)">
+                <span id="setting-row-odd-preview" style="width:28px;height:20px;border-radius:3px;border:1px solid var(--border);background:${APP.settings.rowColorOdd}"></span>
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;font-size:var(--fs-11);color:var(--text-secondary);flex:1">
+                Even
+                <input type="range" min="0" max="120" id="setting-row-even" value="${hexToGray(APP.settings.rowColorEven)}" style="flex:1;accent-color:var(--accent)">
+                <span id="setting-row-even-preview" style="width:28px;height:20px;border-radius:3px;border:1px solid var(--border);background:${APP.settings.rowColorEven}"></span>
+              </label>
+              <button class="btn-sm" id="setting-row-reset" style="font-size:var(--fs-10)">Reset</button>
+            </div>
+          </div>
+
+          <div class="settings-row" style="flex-direction:column;align-items:stretch">
+            <div class="settings-label" style="margin-bottom:8px">
+              <div>Category Accent Colors</div>
+              <div class="settings-desc">Colors used for category tabs and field labels</div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+              ${[
+                ['cat0', 'Geography', '#479EF5'],
+                ['cat1', 'Taxonomy', '#CA50F7'],
+                ['cat2', 'Collecting', '#48ca48'],
+                ['cat3', 'Locality', '#A0A220'],
+                ['cat4', 'Cat 5', '#FF5C5C'],
+                ['cat5', 'Cat 6', '#7fffff'],
+                ['cat6', 'Cat 7', '#ffff7f'],
+                ['catMisc', 'Misc', '#888888'],
+              ].map(([key, label, def]) => `
+                <label style="display:flex;align-items:center;gap:4px;font-size:var(--fs-11);color:var(--text-secondary)">
+                  <input type="color" class="setting-cat-color" data-key="${key}" value="${(APP.settings.catColors && APP.settings.catColors[key]) || def}" style="width:28px;height:22px;border:none;background:none;cursor:pointer;padding:0">
+                  ${label}
+                </label>
+              `).join('')}
+              <button class="btn-sm" id="setting-cat-reset" style="font-size:var(--fs-10)">Reset</button>
+            </div>
+          </div>
+
         </div>
-        <div class="table-lock-toggle ${APP.settings.acceptAllEnabled ? 'unlocked' : 'locked'}" id="setting-accept-all">
-          <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span class="table-lock-label" style="text-transform:none">${APP.settings.acceptAllEnabled ? 'Enabled' : 'Disabled'}</span>
+      </details>
+
+      <details class="settings-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Font and Font Size</summary>
+        <div style="padding:4px 12px 12px">
+
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:center;gap:12px">
+              <label style="font-size:var(--fs-11);color:var(--text-secondary);min-width:70px">Font Family</label>
+              <div id="setting-font-family" class="font-picker" style="position:relative">
+                <div class="font-picker-selected" style="padding:4px 8px;font-size:var(--fs-12);background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;display:flex;justify-content:space-between;align-items:center;min-width:180px">
+                  <span id="font-picker-label">${({
+                    'system-sans': 'System Sans-Serif',
+                    'system-serif': 'System Serif',
+                    'atkinson': 'Atkinson Hyperlegible',
+                    'opendyslexic': 'OpenDyslexic',
+                  })[APP.settings.fontFamily || 'system-sans']}</span>
+                  <span style="font-size:var(--fs-10);color:var(--text-muted);margin-left:8px">&#9662;</span>
+                </div>
+                <div class="font-picker-dropdown" id="font-picker-dropdown" style="display:none;position:absolute;top:100%;left:0;min-width:100%;z-index:9999;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:2px;box-shadow:var(--shadow-lg)">
+                  <div class="font-picker-option" data-value="system-sans" style="padding:6px 8px;cursor:pointer;font-size:var(--fs-12);white-space:nowrap">System Sans-Serif</div>
+                  <div class="font-picker-option" data-value="system-serif" style="padding:6px 8px;cursor:pointer;font-size:var(--fs-12);white-space:nowrap">System Serif</div>
+                  <div class="font-picker-option" data-value="atkinson" style="padding:6px 8px;cursor:pointer;font-size:var(--fs-12);white-space:nowrap">Atkinson Hyperlegible</div>
+                  <div class="font-picker-option" data-value="opendyslexic" style="padding:6px 8px;cursor:pointer;font-size:var(--fs-12);white-space:nowrap">OpenDyslexic</div>
+                </div>
+              </div>
+              <span id="font-preview-text" style="font-size:var(--fs-12);color:var(--text-secondary);white-space:nowrap">| Do you want to use this font for the VoucherVisionGO-Editor?</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <label style="font-size:var(--fs-11);color:var(--text-secondary);min-width:70px">Font Scale</label>
+              <input type="range" min="1.0" max="2.0" step="0.1" id="setting-font-scale" value="${APP.settings.fontScale || 1.0}" style="flex:1;max-width:200px;accent-color:var(--accent)">
+              <span id="setting-font-scale-label" style="font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-secondary);min-width:36px">${(APP.settings.fontScale || 1.0).toFixed(1)}x</span>
+            </div>
+          </div>
+
         </div>
+      </details>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:var(--fs-11)">Reset Project</button>
       </div>
 
-
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Table Edit Lock Warning</div>
-          <div class="settings-desc">Show the warning popup when unlocking table editing</div>
-        </div>
-        <div class="table-lock-toggle ${APP.settings.editLockWarning !== false ? 'unlocked' : 'locked'}" id="setting-edit-lock-warning">
-          <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span class="table-lock-label" style="text-transform:none">${APP.settings.editLockWarning !== false ? 'Enabled' : 'Disabled'}</span>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Image Cache Size</div>
-          <div class="settings-desc">Number of cached images kept in memory (100–6000). Default 2000. Higher values speed up browsing large projects at the cost of more memory use.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input type="range" min="100" max="6000" step="100" id="setting-image-cache" value="${APP.settings.imageCacheSize || 2000}" style="width:140px;accent-color:var(--accent)">
-          <span id="setting-image-cache-label" style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);min-width:40px">${APP.settings.imageCacheSize || 2000}</span>
-        </div>
-      </div>
-
-      <div class="settings-row" style="flex-direction:column;align-items:stretch">
-        <div class="settings-label" style="margin-bottom:8px">
-          <div>Row Colors (Gray)</div>
-          <div class="settings-desc">Alternating background shades for form and table rows</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:16px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);flex:1">
-            Odd
-            <input type="range" min="0" max="120" id="setting-row-odd" value="${hexToGray(APP.settings.rowColorOdd)}" style="flex:1;accent-color:var(--accent)">
-            <span id="setting-row-odd-preview" style="width:28px;height:20px;border-radius:3px;border:1px solid var(--border);background:${APP.settings.rowColorOdd}"></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-secondary);flex:1">
-            Even
-            <input type="range" min="0" max="120" id="setting-row-even" value="${hexToGray(APP.settings.rowColorEven)}" style="flex:1;accent-color:var(--accent)">
-            <span id="setting-row-even-preview" style="width:28px;height:20px;border-radius:3px;border:1px solid var(--border);background:${APP.settings.rowColorEven}"></span>
-          </label>
-          <button class="btn-sm" id="setting-row-reset" style="font-size:10px">Reset</button>
-        </div>
-      </div>
-
-      <div class="settings-row" style="flex-direction:column;align-items:stretch">
-        <div class="settings-label" style="margin-bottom:8px">
-          <div>Category Accent Colors</div>
-          <div class="settings-desc">Colors used for category tabs and field labels</div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-          ${[
-            ['cat0', 'Geography', '#479EF5'],
-            ['cat1', 'Taxonomy', '#CA50F7'],
-            ['cat2', 'Collecting', '#48ca48'],
-            ['cat3', 'Locality', '#A0A220'],
-            ['cat4', 'Cat 5', '#FF5C5C'],
-            ['cat5', 'Cat 6', '#7fffff'],
-            ['cat6', 'Cat 7', '#ffff7f'],
-            ['catMisc', 'Misc', '#888888'],
-          ].map(([key, label, def]) => `
-            <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary)">
-              <input type="color" class="setting-cat-color" data-key="${key}" value="${(APP.settings.catColors && APP.settings.catColors[key]) || def}" style="width:28px;height:22px;border:none;background:none;cursor:pointer;padding:0">
-              ${label}
-            </label>
-          `).join('')}
-          <button class="btn-sm" id="setting-cat-reset" style="font-size:10px">Reset</button>
-        </div>
-      </div>
-
-      <div class="settings-row" id="settings-update-section" style="flex-direction:column;align-items:stretch">
-        <div class="settings-label" style="margin-bottom:10px">
-          <div>Updates</div>
-          <div class="settings-desc">Check for new versions of VoucherVisionGO Editor</div>
-        </div>
-        <div id="update-info-container" style="font-size:12px;color:var(--text-secondary);line-height:1.8">
-          <div>Current version: <span id="update-current-version" style="font-family:var(--font-mono);color:var(--text-primary)">...</span></div>
-          <div>Installed: <span id="update-install-date" style="color:var(--text-muted)">...</span></div>
-          <div>Last checked: <span id="update-last-check" style="color:var(--text-muted)">...</span></div>
-          <div id="update-status-line" style="margin-top:6px"></div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
-          <button class="btn-sm btn-primary" id="btn-check-update" style="font-size:11px">Check for Updates</button>
-          <button class="btn-sm" id="btn-download-update" style="font-size:11px;display:none">Download Update</button>
-          <button class="btn-sm" id="btn-install-update" style="font-size:11px;display:none;background:#1a5c1a;color:#4caf50;border-color:#4caf50">Restart to Update</button>
-          <a id="btn-github-releases" href="#" style="font-size:11px;color:var(--accent);text-decoration:none;margin-left:auto">View releases on GitHub &#x2197;</a>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">
-          <div>Progress Tracker</div>
-          <div class="settings-desc">Supervisor summary of reviewer activity, sessions, cells reviewed, and specimens touched for this project</div>
-        </div>
-        <button class="btn-sm" id="btn-open-progress-tracker">Open Tracker</button>
-      </div>
-
-      <div style="display:flex;align-items:center;gap:8px;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)">
-        <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:11px">Reset Project</button>
-        <div style="flex:1"></div>
-        <button class="btn-sm btn-primary" id="settings-close">Done</button>
       </div>
     </div>
   `;
@@ -13324,10 +13430,6 @@ function openSettingsPopup() {
   document.body.appendChild(overlay);
   overlay.addEventListener('click', () => { overlay.remove(); saveCurrentSettings(); });
 
-  document.getElementById('settings-close').addEventListener('click', () => {
-    overlay.remove();
-    saveCurrentSettings();
-  });
   document.getElementById('settings-close-top').addEventListener('click', () => {
     overlay.remove();
     saveCurrentSettings();
@@ -13365,11 +13467,71 @@ function openSettingsPopup() {
     toggle.querySelector('.table-lock-label').textContent = !current ? 'Enabled' : 'Disabled';
   });
 
+  // Italic emphasis toggle
+  document.getElementById('setting-italic-emphasis').addEventListener('click', () => {
+    const current = APP.settings.italicEmphasis !== false;
+    APP.settings.italicEmphasis = !current;
+    const toggle = document.getElementById('setting-italic-emphasis');
+    toggle.classList.toggle('locked', current);
+    toggle.classList.toggle('unlocked', !current);
+    toggle.querySelector('.table-lock-label').textContent = !current ? 'Enabled' : 'Disabled';
+    applyTypographySettings();
+  });
+
   // Image cache slider
   document.getElementById('setting-image-cache').addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
     APP.settings.imageCacheSize = val;
     document.getElementById('setting-image-cache-label').textContent = val;
+  });
+
+  // Font family custom dropdown
+  const fontPicker = document.getElementById('setting-font-family');
+  const fontDropdown = document.getElementById('font-picker-dropdown');
+  const fontLabel = document.getElementById('font-picker-label');
+  const fontPreview = document.getElementById('font-preview-text');
+  const fontFamilyStacks = {
+    'system-sans': "system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
+    'system-serif': "Georgia,'Times New Roman',Times,serif",
+    'atkinson': "'Atkinson Hyperlegible Next',system-ui,sans-serif",
+    'opendyslexic': "'OpenDyslexic',system-ui,sans-serif",
+  };
+  const fontDisplayNames = {
+    'system-sans': 'System Sans-Serif',
+    'system-serif': 'System Serif',
+    'atkinson': 'Atkinson Hyperlegible',
+    'opendyslexic': 'OpenDyslexic',
+  };
+
+  // Set initial preview font
+  fontPreview.style.fontFamily = fontFamilyStacks[APP.settings.fontFamily || 'system-sans'];
+
+  fontPicker.querySelector('.font-picker-selected').addEventListener('click', () => {
+    fontDropdown.style.display = fontDropdown.style.display === 'none' ? 'block' : 'none';
+  });
+  fontDropdown.querySelectorAll('.font-picker-option').forEach(opt => {
+    opt.addEventListener('mouseenter', () => { opt.style.background = 'var(--bg-hover)'; });
+    opt.addEventListener('mouseleave', () => { opt.style.background = 'none'; });
+    opt.addEventListener('click', () => {
+      const val = opt.dataset.value;
+      APP.settings.fontFamily = val;
+      fontLabel.textContent = fontDisplayNames[val];
+      fontPreview.style.fontFamily = fontFamilyStacks[val];
+      fontDropdown.style.display = 'none';
+      applyTypographySettings();
+    });
+  });
+  // Close dropdown when clicking outside
+  overlay.addEventListener('click', (e) => {
+    if (!fontPicker.contains(e.target)) fontDropdown.style.display = 'none';
+  }, true);
+
+  // Font scale slider
+  document.getElementById('setting-font-scale').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    APP.settings.fontScale = val;
+    document.getElementById('setting-font-scale-label').textContent = val.toFixed(1) + 'x';
+    applyTypographySettings();
   });
 
   // Row gray sliders
@@ -13462,17 +13624,17 @@ function showResetProjectDialog() {
 
   overlay.innerHTML = `
     <div style="background:var(--bg-secondary);border:2px solid var(--error);border-radius:var(--radius);padding:24px;max-width:480px;cursor:default" onclick="event.stopPropagation()">
-      <div style="font-size:16px;font-weight:700;margin-bottom:12px;color:var(--error)">&#9888; Danger: Reset Project</div>
-      <div style="font-size:13px;margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
+      <div style="font-size:var(--fs-16);font-weight:700;margin-bottom:12px;color:var(--error)">&#9888; Danger: Reset Project</div>
+      <div style="font-size:var(--fs-13);margin-bottom:12px;color:var(--text-secondary);line-height:1.6">
         Resetting this project will <strong>permanently delete</strong> all review progress:
       </div>
-      <div style="padding:10px;background:var(--bg-primary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);line-height:1.8">
+      <div style="padding:10px;background:var(--bg-primary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:16px;font-family:var(--font-mono);font-size:var(--fs-12);color:var(--text-secondary);line-height:1.8">
         <div style="color:var(--error)">_INPROGRESS/ (all review progress)</div>
         <div style="color:var(--error)">_REVIEWED/ (all reviewed files)</div>
         <div style="color:var(--error)">Reviewed_Data/ (exported spreadsheets)</div>
         <div>_prompts/ (cached prompts)</div>
       </div>
-      <div style="font-size:12px;margin-bottom:16px;color:var(--text-muted)">
+      <div style="font-size:var(--fs-12);margin-bottom:16px;color:var(--text-muted)">
         Your original JSON files will <strong>not</strong> be deleted. This cannot be undone.
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -13508,7 +13670,7 @@ async function performProjectReset() {
   updateRewindButton();
   APP.state = { version: 1, folder_path: APP.folderPath, specimens: {} };
   APP.project = null;
-  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {} };
+  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {}, fontFamily: 'system-sans', fontScale: 1.0, italicEmphasis: true };
   APP.currentIndex = 0;
 
   // Re-load folder from scratch (re-acquires lock, validates prompt, etc.)

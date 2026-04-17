@@ -361,7 +361,7 @@ function openRewindPopup() {
     overlay.innerHTML = `
       <div class="rewind-popup" onclick="event.stopPropagation()">
         <div class="rewind-header">
-          <span class="rewind-title">Rewind <span style="font-size:11px;color:var(--text-muted);font-weight:normal">(${REWIND.stack.length} / ${REWIND.maxEntries} actions stored)</span></span>
+          <span class="rewind-title">Rewind <span style="font-size:var(--fs-11);color:var(--text-muted);font-weight:normal">(${REWIND.stack.length} / ${REWIND.maxEntries} actions stored)</span></span>
           <button class="btn-sm btn-icon popup-close-btn" id="rewind-close" title="Close"><img src="icons/close.svg" alt="Close"></button>
         </div>
         <div class="rewind-body">
