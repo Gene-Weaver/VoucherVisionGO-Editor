@@ -99,8 +99,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── View Switching ──────────────────────────────────────────
 
 function showView(viewName) {
+  // Save table scroll position before leaving table view
+  if (APP.currentView === 'table' && viewName !== 'table') {
+    const wrapper = document.querySelector('.batch-table-wrapper');
+    if (wrapper) _tableSavedScroll = { scrollTop: wrapper.scrollTop, scrollLeft: wrapper.scrollLeft };
+  }
   APP.currentView = viewName;
-  if (viewName !== 'table') tableSelectedCell = null;
+  if (viewName !== 'table') { tableSelectedCell = null; tableSelectedField = null; }
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const viewMap = { 'folder-picker': 'folder-picker', 'review': 'review', 'table': 'table', 'focus': 'focus' };
   const el = document.getElementById(`${viewMap[viewName] || viewName}-view`);
@@ -591,6 +596,7 @@ async function loadFolder(folderPath) {
     }
 
     // Atomically commit all new state to APP
+    _tableSavedScroll = null;
     APP.folderPath = folderPath;
     APP.specimens = next.specimens;
     APP.settings = next.settings;
@@ -3754,7 +3760,9 @@ let tableSelectedIndex = 0;
 let tableImageType = 'collage';
 let tableEditingLocked = true;
 let tableSelectedCell = null;   // Currently highlighted td element
+let tableSelectedField = null;  // Field name of last selected cell (survives virtual scroll)
 let tableAllFields = [];        // Cached field list for keyboard nav
+let _tableSavedScroll = null;   // { scrollTop, scrollLeft } preserved across view switches
 let focusThumbSize = 52;
 let _tableAutoColumnWidths = null;
 
@@ -3883,6 +3891,7 @@ async function renderTableView() {
   tableAllFields = allFields;
   _tableAutoColumnWidths = null;
   tableSelectedCell = null;
+  tableSelectedField = null;
   const autoColumnWidths = computeAutoTableColumnWidths(allFields);
   _tableAutoColumnWidths = autoColumnWidths;
 
@@ -4014,6 +4023,15 @@ async function renderTableView() {
 
   // Load image for first row
   if (APP.specimens.length > 0) loadTableImage(0);
+
+  // Restore saved scroll position (e.g. returning from form/focus view)
+  if (_tableSavedScroll) {
+    requestAnimationFrame(() => {
+      const w = document.querySelector('.batch-table-wrapper');
+      if (w) { w.scrollTop = _tableSavedScroll.scrollTop; w.scrollLeft = _tableSavedScroll.scrollLeft; }
+    });
+  }
+
   hideNavSpinner();
 }
 
@@ -4272,6 +4290,7 @@ function selectTableRow(index) {
 function selectTableCell(td) {
   if (tableSelectedCell) tableSelectedCell.classList.remove('cell-selected');
   tableSelectedCell = td;
+  tableSelectedField = td.dataset.field || null;
   td.classList.add('cell-selected');
 
   // Make the table wrapper focusable so it receives key events
@@ -5713,6 +5732,668 @@ function renderNameParserSection() {
   });
 
   document.getElementById('btn-open-name-parser')?.addEventListener('click', () => showCollectorNamePopup(''));
+}
+
+// ── Attribution Tool ────────────────────────────────────────────────
+// Drag-and-drop name reassignment across multiple collector attribution
+// fields. Step 1: pick 2–5 fields. Step 2: drag name tiles between cells.
+
+function renderAttributionToolSection() {
+  const container = document.getElementById('focus-attribution-tool-list');
+  if (!container) return;
+  if (focusToolCategory !== 'collectors') { container.innerHTML = ''; return; }
+
+  const availableFields = getAvailableProjectFields();
+  container.innerHTML = renderFocusToolLauncher({
+    description: 'Drag and drop names between attribution fields to reassign collector roles across specimens.',
+    summaryItems: [
+      `${availableFields.length} field${availableFields.length !== 1 ? 's' : ''} available`,
+    ],
+    buttonId: 'btn-open-attribution-tool',
+    buttonLabel: 'Open Attribution Tool',
+    disabled: availableFields.length < 2,
+    note: availableFields.length < 2
+      ? 'At least 2 fields are required to use this tool.'
+      : 'Choose which fields to compare, then drag names between them.'
+  });
+
+  document.getElementById('btn-open-attribution-tool')?.addEventListener('click', () => {
+    const saved = APP.project?.attribution_fields;
+    if (Array.isArray(saved) && saved.length >= 2) {
+      // Validate saved fields still exist in the project
+      const available = new Set(getAvailableProjectFields());
+      const valid = saved.filter(f => available.has(f));
+      if (valid.length >= 2) {
+        showAttributionEditorPopup(valid);
+        return;
+      }
+    }
+    showAttributionFieldPickerPopup();
+  });
+}
+
+function showAttributionFieldPickerPopup() {
+  const allFields = getAvailableProjectFields();
+  const NUM_SLOTS = 5;
+  const saved = APP.project?.attribution_fields || [];
+
+  const dropdownRowsHtml = Array.from({ length: NUM_SLOTS }, (_, i) => {
+    const n = i + 1;
+    const preselected = saved[i] || '';
+    return `
+      <div class="attribution-field-picker-row">
+        <span class="attribution-field-picker-label">attribution_${n}</span>
+        <select class="attribution-field-picker-select focus-popup-field-select" id="attr-field-select-${n}" data-slot="${n}">
+          <option value="">\u2014 none \u2014</option>
+          ${allFields.map(f => `<option value="${escapeAttr(f)}" ${f === preselected ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('')}
+        </select>
+      </div>
+    `;
+  }).join('');
+
+  const popup = createFocusToolPopup({
+    title: 'Attribution Tool \u2014 Select Fields',
+    intro: 'Choose 2 to 5 fields that represent attribution roles (e.g.\u00a0primary collector, secondary collector). Each field can only be assigned to one slot.',
+    popupClass: 'focus-review-popup attribution-field-picker-popup',
+    bodyHtml: dropdownRowsHtml,
+    footerHtml: '<button class="btn-sm btn-primary" id="attr-picker-continue" disabled>Continue</button>',
+  });
+
+  const selects = Array.from({ length: NUM_SLOTS }, (_, i) =>
+    popup.overlay.querySelector(`#attr-field-select-${i + 1}`)
+  );
+
+  function syncDropdowns() {
+    const chosen = new Map();
+    selects.forEach((sel, i) => { if (sel.value) chosen.set(sel.value, i); });
+
+    selects.forEach((sel, idx) => {
+      Array.from(sel.options).forEach(opt => {
+        if (!opt.value) return;
+        const owner = chosen.get(opt.value);
+        opt.disabled = owner !== undefined && owner !== idx;
+      });
+    });
+
+    const count = chosen.size;
+    const btn = popup.overlay.querySelector('#attr-picker-continue');
+    if (btn) btn.disabled = count < 2;
+  }
+
+  selects.forEach(sel => sel?.addEventListener('change', syncDropdowns));
+  syncDropdowns(); // apply mutual exclusion for pre-populated values
+
+  popup.overlay.querySelector('#attr-picker-continue')?.addEventListener('click', () => {
+    const selectedFields = selects
+      .map(sel => sel.value)
+      .filter(Boolean);
+    // Persist selection to project
+    if (APP.project) {
+      APP.project.attribution_fields = selectedFields;
+      scheduleProjectSave();
+    }
+    popup.close();
+    showAttributionEditorPopup(selectedFields);
+  });
+}
+
+function showAttributionEditorPopup(attributionFields) {
+  // Build row data from all specimens
+  const isEtAl = (n) => /^et\s+al\.?$/i.test(n.trim());
+  const rows = [];
+  for (const spec of APP.specimens) {
+    const idx = specimenIndexMap.get(spec.filename);
+    const cells = attributionFields.map(field => {
+      const raw = getCurrentFieldValue(spec, field);
+      const { names } = splitCollectorNames(raw, false);
+      return { field, names: [...names] };
+    });
+    // Skip specimens that have no names in any selected field
+    const hasAny = cells.some(c => c.names.length > 0);
+    if (!hasAny) continue;
+    rows.push({ filename: spec.filename, index: idx, cells });
+  }
+
+  let activeFilename = rows[0]?.filename || null;
+  let imageType = tableImageType;
+  let editorMode = 'dnd'; // 'dnd' or 'preview'
+
+  // Build header labels
+  const headerCols = attributionFields.map(f =>
+    `<span class="attribution-header-col">${escapeHtml(f)}</span>`
+  ).join('');
+
+  const popup = createFocusToolPopup({
+    title: 'Attribution Tool',
+    intro: 'Drag name tiles between cells to reassign attribution. Orange outlines indicate unsaved changes.',
+    popupClass: 'focus-review-popup attribution-editor-popup',
+    bodyClass: 'attribution-editor-layout',
+    bodyHtml: `
+      <div class="attribution-editor-list-wrapper" id="attribution-editor-left">
+        <div class="attribution-mode-toggle" id="attribution-mode-toggle"></div>
+        <div class="attribution-header-row">
+          <span class="attribution-header-qt"></span>
+          <span class="attribution-header-file">Filename</span>
+          ${headerCols}
+        </div>
+        <div class="attribution-editor-list" id="attribution-editor-list"></div>
+      </div>
+      <div class="attribution-editor-resize" id="attribution-editor-resize"></div>
+      <div class="attribution-editor-preview" id="attribution-editor-right">
+        <div class="cluster-gallery-toggle" id="attribution-preview-toggle"></div>
+        <div class="attribution-preview-filename" id="attribution-preview-filename"></div>
+        <div class="wfo-reference-images" id="attribution-preview-image">
+          <div class="table-image-placeholder">Select a specimen</div>
+        </div>
+      </div>
+    `,
+  });
+
+  // Helper: refresh row data from state after confirm operations
+  function refreshRowData() {
+    for (const row of rows) {
+      for (const cell of row.cells) {
+        const raw = getCurrentFieldValue({ filename: row.filename }, cell.field);
+        const { names } = splitCollectorNames(raw, false);
+        cell.names = [...names];
+      }
+    }
+    renderRows();
+    updateAttrConfirmButtons();
+  }
+
+  // Header buttons — insert left of the close button
+  const closeBtn = popup.overlay.querySelector('[data-focus-popup-close]');
+  if (closeBtn) {
+    const headerParent = closeBtn.parentNode;
+
+    // "Confirm [■] Entries" — green accent, confirms only unconfirmed fields
+    const confirmModBtn = document.createElement('button');
+    confirmModBtn.className = 'btn-sm focus-confirm-btn focus-confirm-modified-btn';
+    confirmModBtn.id = 'attr-confirm-modified';
+    confirmModBtn.innerHTML = 'Confirm <span class="focus-confirm-square"></span> Entries';
+    confirmModBtn.title = 'Confirm all unconfirmed entries across attribution fields';
+    headerParent.insertBefore(confirmModBtn, closeBtn);
+
+    // "Confirm ALL" — orange accent
+    const confirmAllBtn = document.createElement('button');
+    confirmAllBtn.className = 'btn-sm focus-confirm-btn focus-confirm-all-btn';
+    confirmAllBtn.id = 'attr-confirm-all';
+    confirmAllBtn.innerHTML = 'Confirm ALL';
+    confirmAllBtn.title = 'Confirm all entries across attribution fields';
+    headerParent.insertBefore(confirmAllBtn, closeBtn);
+
+    // "Change Fields"
+    const changeBtn = document.createElement('button');
+    changeBtn.className = 'btn-sm';
+    changeBtn.textContent = 'Change Fields';
+    changeBtn.title = 'Change attribution field selections';
+    headerParent.insertBefore(changeBtn, closeBtn);
+
+    // "Rewind" — immediately left of the close button
+    const rewindBtn = document.createElement('button');
+    rewindBtn.className = 'btn-sm btn-rewind';
+    rewindBtn.id = 'attr-rewind-btn';
+    rewindBtn.textContent = `Rewind (${REWIND.stack.length})`;
+    rewindBtn.title = 'Rewind actions';
+    rewindBtn.style.display = REWIND.stack.length > 0 ? '' : 'none';
+    headerParent.insertBefore(rewindBtn, closeBtn);
+
+    changeBtn.addEventListener('click', () => {
+      popup.close();
+      showAttributionFieldPickerPopup();
+    });
+
+    rewindBtn.addEventListener('click', () => {
+      openRewindPopup();
+      // Watch for the rewind overlay to close, then refresh popup state
+      const observer = new MutationObserver(() => {
+        if (!document.getElementById('rewind-overlay')) {
+          observer.disconnect();
+          refreshRowData();
+          updateAttrRewindButton();
+        }
+      });
+      observer.observe(document.body, { childList: true });
+    });
+
+    confirmModBtn.addEventListener('click', () => {
+      let limboCount = 0;
+      for (const spec of APP.specimens) {
+        const st = APP.state.specimens[spec.filename];
+        for (const field of attributionFields) {
+          if (st?.unconfirmed_fields?.[field] !== undefined) limboCount++;
+        }
+      }
+      const fieldList = attributionFields.map(f => `<strong>${escapeHtml(f)}</strong>`).join(', ');
+      showApplyCancelPopup(
+        'Confirm Unconfirmed Entries?',
+        `Accept <strong>${limboCount}</strong> unconfirmed entr${limboCount !== 1 ? 'ies' : 'y'} across attribution fields: ${fieldList}.`,
+        async () => {
+          for (const field of attributionFields) {
+            await confirmModifiedField(field);
+          }
+          refreshRowData();
+        },
+        'Confirm'
+      );
+    });
+
+    confirmAllBtn.addEventListener('click', () => {
+      const totalSpecimens = APP.specimens.length;
+      const fieldList = attributionFields.map(f => `<strong>${escapeHtml(f)}</strong>`).join(', ');
+      showApplyCancelPopup(
+        'Confirm ALL Attribution Entries?',
+        `Accept the current values for all <strong>${totalSpecimens}</strong> specimens across ${attributionFields.length} attribution fields: ${fieldList}.`,
+        async () => {
+          for (const field of attributionFields) {
+            await confirmAllFieldValues(field);
+          }
+          refreshRowData();
+        },
+        'Confirm ALL'
+      );
+    });
+  }
+
+  function updateAttrConfirmButtons() {
+    const modBtn = popup.overlay.querySelector('#attr-confirm-modified');
+    const allBtn = popup.overlay.querySelector('#attr-confirm-all');
+    if (!modBtn || !allBtn) return;
+
+    let limboCount = 0;
+    let unresolvedCount = 0;
+    for (const spec of APP.specimens) {
+      const st = APP.state.specimens[spec.filename];
+      for (const field of attributionFields) {
+        if (st?.unconfirmed_fields?.[field] !== undefined) limboCount++;
+        if (!st?.accepted_fields?.[field]) unresolvedCount++;
+      }
+    }
+    modBtn.disabled = limboCount === 0;
+    allBtn.disabled = limboCount === 0 && unresolvedCount === 0;
+  }
+
+  function updateAttrRewindButton() {
+    const btn = popup.overlay.querySelector('#attr-rewind-btn');
+    if (!btn) return;
+    btn.textContent = `Rewind (${REWIND.stack.length})`;
+    btn.style.display = REWIND.stack.length > 0 ? '' : 'none';
+  }
+
+  // Setup collage/original toggle
+  const switchId = `attr-preview-switch-${Date.now()}`;
+  const sw = createSlideSwitch(switchId, [
+    { value: 'collage', label: 'Collage' },
+    { value: 'original', label: 'Original' }
+  ], imageType, (val) => { imageType = val; loadPreviewImage(); });
+  const toggleContainer = popup.overlay.querySelector('#attribution-preview-toggle');
+  if (toggleContainer) { toggleContainer.innerHTML = sw.html; sw.setup(); }
+
+  // Setup mode toggle (Drag and Drop / Preview Literal Entries)
+  const modeSwitchId = `attr-mode-switch-${Date.now()}`;
+  const modeSw = createSlideSwitch(modeSwitchId, [
+    { value: 'dnd', label: 'Drag and Drop' },
+    { value: 'preview', label: 'Preview Literal Entries' }
+  ], editorMode, (val) => { editorMode = val; renderRows(); });
+  const modeToggleContainer = popup.overlay.querySelector('#attribution-mode-toggle');
+  if (modeToggleContainer) { modeToggleContainer.innerHTML = modeSw.html; modeSw.setup(); }
+
+  // Init resizable splitter: left 50–90%, right 10–50%
+  if (popup.body) popup.body.id = 'attribution-editor-container';
+  initHorizontalSplitResize(
+    'attribution-editor-resize',
+    'attribution-editor-left',
+    'attribution-editor-right',
+    'attribution-editor-container',
+    0.50, 0.90
+  );
+
+  const listContainer = popup.overlay.querySelector('#attribution-editor-list');
+
+  async function loadPreviewImage() {
+    const imgEl = popup.overlay.querySelector('#attribution-preview-image');
+    const fnEl = popup.overlay.querySelector('#attribution-preview-filename');
+    if (!imgEl || !activeFilename) return;
+    if (fnEl) fnEl.textContent = getDisplayFilename(activeFilename);
+    imgEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
+    const dataUrl = await window.api.getImage(APP.folderPath, activeFilename, imageType, 'full');
+    if (!imgEl.isConnected) return;
+    imgEl.innerHTML = dataUrl
+      ? `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeFilename))}">`
+      : '<div class="table-image-placeholder">No image available</div>';
+  }
+
+  function reconstructFieldValue(names) {
+    // Ensure "et al." is always last
+    const regular = [];
+    let hasEtAl = false;
+    for (const n of names) {
+      if (isEtAl(n)) { hasEtAl = true; }
+      else { regular.push(n); }
+    }
+    if (hasEtAl) regular.push('et al.');
+    return regular.join(', ');
+  }
+
+  function renderRows() {
+    if (!listContainer) return;
+
+    listContainer.innerHTML = rows.map(row => {
+      const isActive = row.filename === activeFilename;
+      const quickTools = renderPopupQuickTools(row, {
+        tool: 'attribution',
+        includeStatus: false,
+        includePhoto: true,
+        includeFlag: true,
+        photoFieldLabel: attributionFields[0] || '',
+        photoFieldValue: '',
+      });
+
+      const cellsHtml = row.cells.map((cell) => {
+        const isUnconfirmed = APP.state.specimens[row.filename]?.unconfirmed_fields?.[cell.field] !== undefined;
+        if (editorMode === 'preview') {
+          const raw = getCurrentFieldValue({ filename: row.filename }, cell.field);
+          const isAccepted = APP.state.specimens[row.filename]?.accepted_fields?.[cell.field] !== undefined;
+          let stateClass;
+          if (isUnconfirmed) stateClass = 'attribution-literal-limbo';
+          else if (isAccepted) stateClass = 'attribution-literal-accepted';
+          else stateClass = 'attribution-literal-unaccepted';
+          const displayVal = raw
+            ? `<span class="attribution-literal-value ${stateClass}">${escapeHtml(raw)}</span>`
+            : `<span class="cell-empty-placeholder ${stateClass}">(empty)</span>`;
+          return `<div class="attribution-cell attribution-cell-preview">${displayVal}</div>`;
+        }
+        const tilesHtml = cell.names.map((name, nameIdx) => `
+          <div class="attribution-tile ${isUnconfirmed ? 'attribution-tile-moved' : ''}"
+               draggable="true"
+               data-file="${escapeAttr(row.filename)}"
+               data-field="${escapeAttr(cell.field)}"
+               data-name-index="${nameIdx}"
+               data-name-text="${escapeAttr(name)}">
+            <span class="attribution-tile-order">${nameIdx + 1}</span>
+            <span class="attribution-tile-name">${escapeHtml(name)}</span>
+            <button type="button" class="attribution-tile-dup" title="Duplicate name to another field"
+                    data-file="${escapeAttr(row.filename)}" data-field="${escapeAttr(cell.field)}" data-name-index="${nameIdx}">
+              <img src="icons/duplicate.svg" alt="" aria-hidden="true">
+            </button>
+            <button type="button" class="attribution-tile-del" title="Remove name from this field"
+                    data-file="${escapeAttr(row.filename)}" data-field="${escapeAttr(cell.field)}" data-name-index="${nameIdx}">
+              <img src="icons/close.svg" alt="" aria-hidden="true">
+            </button>
+          </div>
+        `).join('');
+        return `<div class="attribution-cell" data-file="${escapeAttr(row.filename)}" data-field="${escapeAttr(cell.field)}">${tilesHtml}</div>`;
+      }).join('');
+
+      return `
+        <div class="attribution-row ${isActive ? 'active' : ''}" data-file="${escapeAttr(row.filename)}">
+          ${quickTools}
+          <span class="attribution-col-file" title="${escapeAttr(getDisplayFilename(row.filename))}">${escapeHtml(getDisplayFilename(row.filename, 24))}</span>
+          ${cellsHtml}
+        </div>
+      `;
+    }).join('');
+
+    // Wire quick tools
+    wirePopupQuickTools(listContainer, { closeFn: () => popup.close(), onFlagRefresh: renderRows });
+
+    // Wire row clicks for image preview
+    listContainer.querySelectorAll('.attribution-row').forEach(rowEl => {
+      rowEl.addEventListener('click', (e) => {
+        if (e.target.closest('.attribution-tile, .popup-quicktools')) return;
+        activeFilename = rowEl.dataset.file;
+        listContainer.querySelectorAll('.attribution-row.active').forEach(r => r.classList.remove('active'));
+        rowEl.classList.add('active');
+        loadPreviewImage();
+      });
+    });
+
+    // Wire inline editing on tile name click
+    listContainer.querySelectorAll('.attribution-tile-name').forEach(nameSpan => {
+      nameSpan.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tile = nameSpan.closest('.attribution-tile');
+        if (!tile || nameSpan.querySelector('input')) return;
+        tile.setAttribute('draggable', 'false');
+        const filename = tile.dataset.file;
+        const field = tile.dataset.field;
+        const nameIdx = parseInt(tile.dataset.nameIndex, 10);
+        const row = rows.find(r => r.filename === filename);
+        if (!row) return;
+        const cell = row.cells.find(c => c.field === field);
+        if (!cell) return;
+        const currentVal = cell.names[nameIdx];
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'attribution-tile-editor';
+        input.value = currentVal;
+        nameSpan.textContent = '';
+        nameSpan.appendChild(input);
+        input.focus();
+        input.select();
+
+        const save = () => {
+          const newVal = input.value.trim();
+          if (newVal !== currentVal) {
+            const _rwBefore = rewindCapture([filename], [field]);
+            if (newVal === '') {
+              // Delete the name
+              cell.names.splice(nameIdx, 1);
+            } else {
+              cell.names[nameIdx] = newVal;
+            }
+            if (!APP.state.specimens[filename]) initSpecimenState(filename);
+            const specState = APP.state.specimens[filename];
+            stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+            specState.last_touched = new Date().toISOString();
+            rewindRecord('attribution', newVal === '' ? 'Attribution Delete' : 'Attribution Edit',
+              `${newVal === '' ? 'Removed' : 'Edited'} name in ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+            scheduleSaveState(filename);
+          }
+          renderRows();
+        };
+
+        input.addEventListener('blur', save);
+        input.addEventListener('keydown', (evt) => {
+          if (evt.key === 'Enter') { evt.preventDefault(); input.removeEventListener('blur', save); save(); }
+          else if (evt.key === 'Escape') { evt.preventDefault(); renderRows(); }
+        });
+      });
+    });
+
+    // Wire duplicate buttons — duplicate stays in the same column
+    listContainer.querySelectorAll('.attribution-tile-dup').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const filename = btn.dataset.file;
+        const field = btn.dataset.field;
+        const nameIdx = parseInt(btn.dataset.nameIndex, 10);
+        const row = rows.find(r => r.filename === filename);
+        if (!row) return;
+        const cell = row.cells.find(c => c.field === field);
+        if (!cell) return;
+        const name = cell.names[nameIdx];
+
+        const _rwBefore = rewindCapture([filename], [field]);
+        cell.names.splice(nameIdx + 1, 0, name);
+
+        if (!APP.state.specimens[filename]) initSpecimenState(filename);
+        const specState = APP.state.specimens[filename];
+        stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+        specState.last_touched = new Date().toISOString();
+        rewindRecord('attribution', 'Attribution Duplicate', `Duplicated "${name}" in ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+        scheduleSaveState(filename);
+        renderRows();
+      });
+    });
+
+    // Wire delete buttons
+    listContainer.querySelectorAll('.attribution-tile-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const filename = btn.dataset.file;
+        const field = btn.dataset.field;
+        const nameIdx = parseInt(btn.dataset.nameIndex, 10);
+        const row = rows.find(r => r.filename === filename);
+        if (!row) return;
+        const cell = row.cells.find(c => c.field === field);
+        if (!cell) return;
+        const removedName = cell.names[nameIdx];
+
+        const _rwBefore = rewindCapture([filename], [field]);
+        cell.names.splice(nameIdx, 1);
+
+        if (!APP.state.specimens[filename]) initSpecimenState(filename);
+        const specState = APP.state.specimens[filename];
+        stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+        specState.last_touched = new Date().toISOString();
+        rewindRecord('attribution', 'Attribution Delete', `Removed "${removedName}" from ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+        scheduleSaveState(filename);
+        renderRows();
+      });
+    });
+
+    // Wire drag-and-drop
+    wireDragAndDrop();
+
+    // Update header button states
+    updateAttrConfirmButtons();
+    updateAttrRewindButton();
+  }
+
+  function wireDragAndDrop() {
+    let dragSourceFile = null;
+
+    listContainer.querySelectorAll('.attribution-tile').forEach(tile => {
+      tile.addEventListener('dragstart', (e) => {
+        dragSourceFile = tile.dataset.file;
+        e.dataTransfer.setData('application/x-attribution', JSON.stringify({
+          name: tile.dataset.nameText,
+          sourceFile: tile.dataset.file,
+          sourceField: tile.dataset.field,
+          sourceIndex: parseInt(tile.dataset.nameIndex, 10),
+        }));
+        e.dataTransfer.effectAllowed = 'move';
+        tile.classList.add('attribution-tile-dragging');
+      });
+      tile.addEventListener('dragend', () => {
+        tile.classList.remove('attribution-tile-dragging');
+        dragSourceFile = null;
+        listContainer.querySelectorAll('.attribution-cell-dragover').forEach(c => c.classList.remove('attribution-cell-dragover'));
+        listContainer.querySelectorAll('.attribution-drop-indicator').forEach(el => el.remove());
+      });
+    });
+
+    listContainer.querySelectorAll('.attribution-cell').forEach(cell => {
+      cell.addEventListener('dragover', (e) => {
+        if (dragSourceFile !== cell.dataset.file) return; // same-row only
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        cell.classList.add('attribution-cell-dragover');
+
+        // Positional insertion indicator
+        cell.querySelectorAll('.attribution-drop-indicator').forEach(el => el.remove());
+        const tiles = Array.from(cell.querySelectorAll('.attribution-tile:not(.attribution-tile-dragging)'));
+        const mouseY = e.clientY;
+        let insertIdx = tiles.length;
+        for (let i = 0; i < tiles.length; i++) {
+          const rect = tiles[i].getBoundingClientRect();
+          if (mouseY < rect.top + rect.height / 2) {
+            insertIdx = i;
+            break;
+          }
+        }
+        const indicator = document.createElement('div');
+        indicator.className = 'attribution-drop-indicator';
+        if (insertIdx < tiles.length) {
+          cell.insertBefore(indicator, tiles[insertIdx]);
+        } else {
+          cell.appendChild(indicator);
+        }
+      });
+
+      cell.addEventListener('dragleave', (e) => {
+        if (!cell.contains(e.relatedTarget)) {
+          cell.classList.remove('attribution-cell-dragover');
+          cell.querySelectorAll('.attribution-drop-indicator').forEach(el => el.remove());
+        }
+      });
+
+      cell.addEventListener('drop', (e) => {
+        e.preventDefault();
+        cell.classList.remove('attribution-cell-dragover');
+        cell.querySelectorAll('.attribution-drop-indicator').forEach(el => el.remove());
+
+        const raw = e.dataTransfer.getData('application/x-attribution');
+        if (!raw) return;
+        const data = JSON.parse(raw);
+
+        // Same-row only
+        if (data.sourceFile !== cell.dataset.file) return;
+
+        const targetField = cell.dataset.field;
+        const filename = data.sourceFile;
+
+        // Find the row
+        const row = rows.find(r => r.filename === filename);
+        if (!row) return;
+        const sourceCell = row.cells.find(c => c.field === data.sourceField);
+        const targetCell = row.cells.find(c => c.field === targetField);
+        if (!sourceCell || !targetCell) return;
+
+        // Compute insertion index from mouse position
+        const tiles = Array.from(cell.querySelectorAll('.attribution-tile:not(.attribution-tile-dragging)'));
+        const mouseY = e.clientY;
+        let insertIdx = tiles.length;
+        for (let i = 0; i < tiles.length; i++) {
+          const rect = tiles[i].getBoundingClientRect();
+          if (mouseY < rect.top + rect.height / 2) {
+            insertIdx = i;
+            break;
+          }
+        }
+
+        // Capture undo state
+        const _rwBefore = rewindCapture([filename], [data.sourceField, targetField]);
+
+        // Remove from source
+        const [movedName] = sourceCell.names.splice(data.sourceIndex, 1);
+
+        // If same field, adjust insert index if source was before target
+        if (data.sourceField === targetField && data.sourceIndex < insertIdx) {
+          insertIdx = Math.max(0, insertIdx - 1);
+        }
+
+        // Insert into target
+        targetCell.names.splice(insertIdx, 0, movedName);
+
+        // Stage as unconfirmed
+        if (!APP.state.specimens[filename]) initSpecimenState(filename);
+        const specState = APP.state.specimens[filename];
+        stageFieldAsUnconfirmed(specState, data.sourceField, reconstructFieldValue(sourceCell.names));
+        if (data.sourceField !== targetField) {
+          stageFieldAsUnconfirmed(specState, targetField, reconstructFieldValue(targetCell.names));
+        }
+        specState.last_touched = new Date().toISOString();
+
+
+        // Record undo
+        rewindRecord('attribution', 'Attribution Move', `Moved "${movedName}" from ${data.sourceField} to ${targetField} on ${getDisplayFilename(filename)}`, _rwBefore);
+
+        scheduleSaveState(filename);
+        renderRows();
+      });
+    });
+  }
+
+  // Initial render
+  renderRows();
+  updateAttrConfirmButtons();
+  loadPreviewImage();
 }
 
 function showClusterReviewPopup(selectedField = focusField) {
@@ -10034,6 +10715,12 @@ function renderFocusMain() {
       `)}
       </div>
 
+      <div class="focus-row focus-tool-row focus-tool-row-compact" id="focus-row-attribution" data-tool-cats="collectors">
+      ${section('attribution', 'Attribution Tool', '', `
+        <div id="focus-attribution-tool-list"></div>
+      `)}
+      </div>
+
       <div class="focus-row focus-tool-row focus-tool-row-compact" id="focus-row-auth" data-tool-cats="taxonomy">
       ${section('authorship', 'Authorship Detection', '', `
         <div id="focus-authorship-list"></div>
@@ -10231,6 +10918,7 @@ function renderFocusMain() {
   renderStandardizeSection();
   renderVoucherVisionBatchSection();
   renderNameParserSection();
+  renderAttributionToolSection();
   renderAuthorshipSection();
   renderWfoBackboneSection();
   renderCatalogPatternsLauncherSection(fieldValues);
@@ -11668,7 +12356,9 @@ function getCurrentTableCaseField() {
   if (editingCell?.dataset.field) return editingCell.dataset.field;
   if (tableSelectedCell?.isConnected && tableSelectedCell.dataset.field) return tableSelectedCell.dataset.field;
   const selectedCell = document.querySelector('.batch-table td.cell-selected[data-field]');
-  return selectedCell?.dataset.field || null;
+  if (selectedCell?.dataset.field) return selectedCell.dataset.field;
+  // Fallback: field name persisted from last selection (survives virtual scroll re-render)
+  return tableSelectedField || null;
 }
 
 function getTableCaseScopeRows() {
@@ -12028,6 +12718,19 @@ function openFlaggedSpecimensPopup() {
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
           <span style="font-size:14px;font-weight:600;color:var(--text-error);display:inline-flex;align-items:center;gap:6px">${flagIconSvg(true, 16)} ${count} Flagged Specimen${count !== 1 ? 's' : ''}</span>
           ${popupCloseBtnHtml('flagged-popup-close')}
+        </div>
+        <div class="flagged-popup-key">
+          <span class="flagged-popup-key-item">
+            ${flagIconSvg(true, 12)}${sharedAssetIconHtml('shared-asset-icon-tag', 11, 'flag-tag-btn-active-preview')}
+            Flagged by this tool
+          </span>
+          <span class="flagged-popup-key-sep">&middot;</span>
+          <span class="flagged-popup-key-item">
+            ${flagIconSvg(true, 12)}${sharedAssetIconHtml('shared-asset-icon-tag', 11, 'flag-tag-btn-inactive-preview')}
+            Flagged by another tool
+          </span>
+          <span class="flagged-popup-key-sep">&middot;</span>
+          <span class="flagged-popup-key-note">Toggling inside a tool only affects that tool\u2019s tag. Use this popup to clear all tags.</span>
         </div>
         <div class="flagged-popup-list" style="overflow-y:auto;flex:1;min-height:0">
           ${html}

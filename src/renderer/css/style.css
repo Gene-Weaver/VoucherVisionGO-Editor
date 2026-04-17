@@ -5440,6 +5440,372 @@ textarea { resize: vertical; min-height: 60px; }
   color: var(--accent);
 }
 
+/* ── Attribution Tool ──────────────────────────────────── */
+
+/* Step 1: Field Picker */
+.attribution-field-picker-popup {
+  width: 520px;
+  max-width: 90vw;
+}
+.attribution-field-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+.attribution-field-picker-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  min-width: 100px;
+  font-family: var(--font-mono);
+}
+.attribution-field-picker-select {
+  flex: 1;
+}
+
+/* Step 2: Editor Popup */
+.attribution-editor-popup {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+}
+.attribution-editor-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.attribution-editor-list-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  width: 70%;
+  flex: none;
+}
+.attribution-editor-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.attribution-editor-resize {
+  width: 5px;
+  min-width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.attribution-editor-resize:hover,
+.attribution-editor-resize.dragging {
+  background: var(--accent);
+}
+.attribution-editor-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary);
+  padding: 12px;
+  gap: 10px;
+  width: 30%;
+  flex: none;
+}
+.attribution-preview-filename {
+  text-align: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.attribution-editor-preview .wfo-reference-images {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.attribution-editor-preview .wfo-reference-images img {
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  display: block;
+}
+
+/* Flag key (flagged specimens popup) */
+.flagged-popup-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  margin-bottom: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.flagged-popup-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--error);
+}
+.flag-tag-btn-active-preview {
+  color: var(--error);
+}
+.flag-tag-btn-inactive-preview {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+.flagged-popup-key-sep {
+  color: var(--border);
+}
+.flagged-popup-key-note {
+  font-style: italic;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* Mode toggle */
+.attribution-mode-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 8px 8px 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Header row */
+.attribution-header-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  gap: 8px;
+  flex-shrink: 0;
+}
+.attribution-header-qt {
+  min-width: 120px;
+}
+.attribution-header-file {
+  min-width: 120px;
+  max-width: 160px;
+}
+.attribution-header-col {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Specimen rows */
+.attribution-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.attribution-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.attribution-row.active {
+  background: rgba(46, 204, 113, 0.06);
+}
+.attribution-col-file {
+  min-width: 120px;
+  max-width: 160px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-top: 4px;
+}
+
+/* Attribution cells (drop targets) */
+.attribution-cell {
+  flex: 1;
+  min-height: 28px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 4px;
+  transition: background 0.15s;
+  position: relative;
+}
+.attribution-cell-dragover {
+  background: rgba(46, 204, 113, 0.08);
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* Name tiles */
+.attribution-tile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--bg-primary);
+  cursor: grab;
+  user-select: none;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.attribution-tile:hover {
+  border-color: var(--text-muted);
+}
+.attribution-tile:active {
+  cursor: grabbing;
+}
+.attribution-tile-dragging {
+  opacity: 0.35;
+}
+.attribution-tile-moved {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 1px var(--warning);
+}
+.attribution-tile-order {
+  font-size: 9px;
+  color: var(--text-muted);
+  min-width: 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.attribution-tile-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Duplicate & Delete buttons */
+.attribution-tile-dup,
+.attribution-tile-del {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.attribution-tile:hover .attribution-tile-dup,
+.attribution-tile:hover .attribution-tile-del {
+  opacity: 0.6;
+}
+.attribution-tile-dup:hover,
+.attribution-tile-del:hover {
+  opacity: 1 !important;
+}
+.attribution-tile-dup img,
+.attribution-tile-del img {
+  width: 13px;
+  height: 13px;
+  filter: brightness(0) invert(0.55);
+}
+.attribution-tile-dup:hover img {
+  filter: brightness(0) invert(0.45) sepia(1) saturate(5) hue-rotate(90deg);
+}
+.attribution-tile-del:hover img {
+  filter: brightness(0) invert(0.45) sepia(1) saturate(5) hue-rotate(0deg);
+}
+
+/* Inline tile editor */
+.attribution-tile-name {
+  cursor: text;
+}
+.attribution-tile-name:hover {
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.2);
+}
+.attribution-tile-editor {
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 1px 4px;
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(46, 204, 113, 0.15);
+}
+
+/* Preview mode (literal entries) — mirrors Table Key styles */
+.attribution-cell-preview {
+  cursor: default;
+  padding: 4px 8px;
+  align-items: flex-start;
+}
+.attribution-literal-value {
+  font-size: 11px;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.attribution-literal-unaccepted {
+  color: #b8860b;
+  font-style: italic;
+}
+.attribution-literal-accepted {
+  color: var(--text-primary);
+}
+.attribution-literal-limbo {
+  color: var(--warning);
+  font-style: italic;
+}
+.attribution-cell-preview:has(.attribution-literal-limbo) {
+  outline: 2px solid var(--warning);
+  outline-offset: -2px;
+}
+
+/* Drop insertion indicator */
+.attribution-drop-indicator {
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+
+/* Header action buttons */
+.attribution-editor-popup .name-parser-header {
+  gap: 8px;
+}
+.attribution-editor-popup .name-parser-header .btn-sm:not(.btn-icon):first-of-type {
+  margin-left: auto;
+}
+.attribution-editor-popup .name-parser-header .btn-sm:not(.btn-icon) {
+  flex-shrink: 0;
+}
+
+/* Hide status square in attribution popup */
+.attribution-editor-popup .bin-status-square,
+.attribution-editor-popup .field-status {
+  display: none;
+}
+
 /* ── Authorship Splitter Popup ─────────────────────────── */
 
 .auth-popup {
