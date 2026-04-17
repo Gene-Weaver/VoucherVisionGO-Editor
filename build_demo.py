@@ -296,7 +296,7 @@ html = f"""<!DOCTYPE html>
 </head>
 <body>
   <div class="demo-banner">
-    DEMO MODE — Changes are not saved. <a href="https://github.com/Gene-Weaver/VoucherVisionGO-Editor/releases" target="_blank">Download the full app</a> to review your own data.
+    DEMO MODE — Changes are not saved. Some tools are disabled/non-functional in this preview. <a href="https://github.com/Gene-Weaver/VoucherVisionGO-Editor/releases" target="_blank">Download the full app</a> to review your own data.
   </div>
   <div id="app">
     <header id="nav-bar"></header>
