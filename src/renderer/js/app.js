@@ -26,8 +26,8 @@ const APP = {
   sessionId: null,
   settings: {
     acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light',
-    rowColorOdd: '#2f2f2f', rowColorEven: '#242424',
-    catColors: { cat0: '#479EF5', cat1: '#CA50F7', cat2: '#48CA48', cat3: '#A0A220', cat4: '#FF5C5C', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' },
+    rowColorOdd: ThemeDefaults.settings.rowColorOdd, rowColorEven: ThemeDefaults.settings.rowColorEven,
+    catColors: { ...ThemeDefaults.settings.catColors },
   },
 
   // Category color assignments
@@ -701,7 +701,7 @@ async function loadSpecimen(index) {
   if (APP.currentSpecimen.prompt) {
     APP.currentPrompt = await window.api.fetchPrompt(APP.currentSpecimen.prompt, APP.folderPath);
   } else {
-    APP.currentPrompt = { mapping: {}, rules: {}, metadata: {}, checklist: [], review_not_required: [] };
+    APP.currentPrompt = { mapping: {}, rules: {}, metadata: {}, checklist: [], review_not_required: [], field_default_values: {} };
   }
 
   // Initialize specimen state if not exists
@@ -1608,7 +1608,7 @@ function initMap(lat, lng) {
     currentTileLayer = L.tileLayer(tile.url, { attribution: tile.attribution, ...tile.options }).addTo(mapInstance);
 
     L.circleMarker([lat, lng], {
-      color: '#48ca48', fillColor: '#48ca48', fillOpacity: 0.8, radius: 8
+      color: ThemeDefaults.colors.map.marker, fillColor: ThemeDefaults.colors.map.marker, fillOpacity: 0.8, radius: 8
     }).addTo(mapInstance).bindPopup(`Decimal: ${lat}, ${lng}`);
 
     setTimeout(() => mapInstance.invalidateSize(), 100);
@@ -2208,12 +2208,12 @@ function isEnterKey(event) {
 
 function getStatusLegendItems() {
   return [
-    { className: 'pending', label: 'Pending', swatchStyle: 'background:#000' },
+    { className: 'pending', label: 'Pending', swatchStyle: 'background:var(--surface-black)' },
     { className: 'unconfirmed', label: 'Unconfirmed', swatchStyle: 'background:var(--warning)' },
     { className: 'ai', label: 'Accepted', swatchStyle: 'background:transparent;border:1px solid var(--border)' },
-    { className: 'edited', label: 'Accepted (edited)', swatchStyle: 'background:#2d5a7a' },
+    { className: 'edited', label: 'Accepted (edited)', swatchStyle: 'background:var(--bg-edited)' },
     { className: 'user_added', label: 'Accepted (added)', swatchStyle: 'background:var(--accent)' },
-    { className: 'confirmed_empty', label: 'Accepted (empty)', swatchStyle: 'background:rgba(255,255,255,0.08);border:1px solid var(--border)' },
+    { className: 'confirmed_empty', label: 'Accepted (empty)', swatchStyle: 'background:var(--glass-08);border:1px solid var(--border)' },
   ];
 }
 
@@ -2302,6 +2302,12 @@ const HOTKEY_CARD_DEFS = [
     keys: ['mod', 'T'],
     description: 'Open the Checklist',
     icon: 'icons/list-todo.svg',
+  },
+  {
+    title: '*N*ull Defaults',
+    keys: ['mod', 'N'],
+    description: 'Cycle through prompt-defined default null values for the active field',
+    icon: 'icons/tag-secondary.svg',
   },
   // Keep this Hotkeys entry last in the list.
   {
@@ -2500,6 +2506,12 @@ document.addEventListener('keydown', (e) => {
     _caseToggleLastExpectedText = transformCaseText(context.selectedText, nextType);
     return;
   }
+
+  if (e.key === 'n') {
+    e.preventDefault();
+    handleNullCycleHotkey();
+    return;
+  }
 });
 
 // Ctrl+D toggle-case state. The cycle restarts whenever the user changes
@@ -2507,6 +2519,138 @@ document.addEventListener('keydown', (e) => {
 let _caseToggleCycleIndex = -1;
 let _caseToggleLastElement = null;
 let _caseToggleLastExpectedText = null;
+
+// Ctrl+N null-default cycle state.
+let _nullCycleField = null;
+let _nullCycleIndex = -1;
+
+function showBriefToast(message, durationMs = 2000) {
+  const existing = document.getElementById('brief-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'brief-toast';
+  toast.className = 'brief-toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('visible'));
+  setTimeout(() => { toast.classList.remove('visible'); setTimeout(() => toast.remove(), 200); }, durationMs);
+}
+
+function handleNullCycleHotkey() {
+  const defaults = APP.currentPrompt?.field_default_values;
+  if (!defaults || Object.keys(defaults).length === 0) {
+    showBriefToast('Default null values are not provided in the prompt');
+    return;
+  }
+
+  // Determine active field based on current view
+  let fieldName = null;
+
+  if (APP.currentView === 'review') {
+    const active = document.activeElement;
+    if (active && active.classList.contains('field-input') && active.dataset.field) {
+      fieldName = active.dataset.field;
+    }
+  } else if (APP.currentView === 'table') {
+    fieldName = getCurrentTableCaseField();
+  } else if (APP.currentView === 'focus') {
+    fieldName = focusField;
+  }
+
+  if (!fieldName) return;
+
+  const values = defaults[fieldName];
+  if (!Array.isArray(values) || values.length === 0) return;
+
+  // Cycle: if same field as last press, advance; otherwise start at 0
+  if (_nullCycleField === fieldName) {
+    _nullCycleIndex = (_nullCycleIndex + 1) % values.length;
+  } else {
+    _nullCycleField = fieldName;
+    _nullCycleIndex = 0;
+  }
+
+  const newValue = values[_nullCycleIndex];
+
+  if (APP.currentView === 'review') {
+    acceptField(fieldName, newValue, 'edited');
+  } else if (APP.currentView === 'table') {
+    applyNullDefaultToTableCell(fieldName, newValue);
+  } else if (APP.currentView === 'focus') {
+    applyNullDefaultToFocusField(fieldName, newValue);
+  }
+}
+
+function applyNullDefaultToTableCell(fieldName, newValue) {
+  // Find the editing input or selected cell
+  const editInput = document.querySelector('.batch-table .cell-edit-input');
+  if (editInput) {
+    // Currently editing — update the contenteditable
+    editInput.textContent = newValue;
+    editInput.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+
+  // Not editing — apply directly to the selected cell's specimen
+  if (!tableSelectedCell?.isConnected) return;
+  const td = tableSelectedCell;
+  const row = td.closest('tr');
+  if (!row) return;
+  const specimenIndex = parseInt(row.dataset.index, 10);
+  if (isNaN(specimenIndex)) return;
+  const spec = APP.specimens[specimenIndex];
+  if (!spec) return;
+
+  if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+  const specState = APP.state.specimens[spec.filename];
+  const _rwBefore = rewindCapture([spec.filename], [fieldName], { categories_confirmed: true });
+
+  specState.accepted_fields[fieldName] = { value: newValue, source: 'edited' };
+  if (specState.unconfirmed_fields) delete specState.unconfirmed_fields[fieldName];
+  specState.last_touched = new Date().toISOString();
+
+  td.textContent = newValue;
+  td.classList.remove('cell-unaccepted');
+  td.classList.add('cell-accepted');
+  td.title = newValue;
+
+  autoConfirmCategories(spec.filename);
+  rewindRecord('cellEdit', 'Null Default', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+  scheduleSaveState(spec.filename);
+  scheduleAutoSaveReviewed(spec.filename);
+  scheduleTableRerender();
+}
+
+function applyNullDefaultToFocusField(fieldName, newValue) {
+  // Find the active cell in the focus carousel
+  const activeCell = document.querySelector('#focus-view .focus-cell.is-current');
+  if (!activeCell) return;
+  const specimenIndex = parseInt(activeCell.dataset.index, 10);
+  if (isNaN(specimenIndex)) return;
+  const spec = APP.specimens[specimenIndex];
+  if (!spec) return;
+
+  // Check if there's an open textarea editor
+  const editInput = activeCell.querySelector('textarea.cell-edit-input');
+  if (editInput) {
+    editInput.value = newValue;
+    editInput.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+
+  if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+  const specState = APP.state.specimens[spec.filename];
+  const _rwBefore = rewindCapture([spec.filename], [fieldName]);
+
+  if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
+  specState.unconfirmed_fields[fieldName] = newValue;
+  specState.last_touched = new Date().toISOString();
+
+  rewindRecord('focusCellEdit', 'Null Default', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+  scheduleSaveState(spec.filename);
+  renderFocusSidebar(getFocusCategories());
+  renderFocusMain();
+}
 
 // Picks the correct capture function based on which popup/view the user is
 // currently interacting with. Tries the most specific context first (cluster
@@ -2882,8 +3026,8 @@ function renderCategoryFooter() {
           ? `<div class="case-module" style="flex-direction:row;gap:8px;padding:4px 10px">
               <div class="case-module-label" style="text-transform:none;letter-spacing:0;font-size:var(--fs-10);white-space:nowrap">For ${escapeHtml(cat.name)}:</div>
               <div class="case-module-buttons">
-                ${APP.settings.confirmRecordsEnabled !== false ? `<button class="btn-sm" id="btn-confirm-records" style="background:#1a3a1a;color:var(--accent);border-color:var(--accent)">Confirm Records</button>` : ''}
-                ${APP.settings.acceptAllEnabled ? `<button class="btn-sm" id="btn-accept-all" style="background:#3a2020;color:var(--warning);border-color:var(--warning)">Accept VoucherVision</button>` : ''}
+                ${APP.settings.confirmRecordsEnabled !== false ? `<button class="btn-sm" id="btn-confirm-records" style="background:var(--bg-success);color:var(--accent);border-color:var(--accent)">Confirm Records</button>` : ''}
+                ${APP.settings.acceptAllEnabled ? `<button class="btn-sm" id="btn-accept-all" style="background:var(--bg-error);color:var(--warning);border-color:var(--warning)">Accept VoucherVision</button>` : ''}
               </div>
             </div>`
           : ''}
@@ -3093,7 +3237,7 @@ function showExportWarningDialog(incomplete) {
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn-sm" id="export-cancel">Return to Review</button>
-        <button class="btn-sm" style="background:#8b4513;color:#fff;border-color:#8b4513" id="export-anyway">Export Anyway</button>
+        <button class="btn-sm" style="background:var(--btn-export);color:var(--surface-white);border-color:var(--btn-export)" id="export-anyway">Export Anyway</button>
       </div>
     </div>
   `;
@@ -3133,7 +3277,7 @@ function showFinalExportWarning(incomplete) {
       </div>
 
       <div style="margin-bottom:16px;display:flex;flex-direction:column;gap:10px">
-        <div style="padding:12px;border:2px solid var(--accent);border-radius:var(--radius);background:rgba(46,204,113,0.08);cursor:pointer" id="option-blank">
+        <div style="padding:12px;border:2px solid var(--accent);border-radius:var(--radius);background:var(--accent-tint-08);cursor:pointer" id="option-blank">
           <div style="font-size:var(--fs-13);font-weight:600;color:var(--accent);margin-bottom:4px">Leave unreviewed fields blank (Recommended)</div>
           <div style="font-size:var(--fs-11);color:var(--text-muted);line-height:1.4">
             Unreviewed fields will be exported as empty strings. This preserves the zero-trust workflow — only values you have explicitly confirmed will appear in the output.
@@ -4564,7 +4708,7 @@ function toggleTableLock() {
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button class="btn-sm" id="lock-cancel">Cancel</button>
-          <button class="btn-sm" style="background:var(--warning);color:#000;border-color:var(--warning);font-weight:600" id="lock-confirm">Enable Editing</button>
+          <button class="btn-sm" style="background:var(--warning);color:var(--surface-black);border-color:var(--warning);font-weight:600" id="lock-confirm">Enable Editing</button>
         </div>
       </div>
     `;
@@ -11904,12 +12048,12 @@ function renderFocusSpecimens(cachedFieldValues) {
       flairColor = 'var(--warning)';
     } else if (v.cellState === 'accepted') {
       const src = APP.state.specimens[v.filename]?.accepted_fields?.[focusField]?.source || 'ai';
-      if (src === 'edited') flairColor = '#2d5a7a';
+      if (src === 'edited') flairColor = 'var(--bg-edited)';
       else if (src === 'user_added') flairColor = 'var(--accent)';
       else if (src === 'confirmed_empty') flairColor = 'var(--bg-tertiary)';
       else flairColor = 'transparent';
     } else {
-      flairColor = '#000';
+      flairColor = 'var(--surface-black)';
     }
     const isFlagged = APP.state.specimens[v.filename]?.flagged;
     return `
@@ -12730,8 +12874,8 @@ function escapeRegex(str) {
 
 function applyThemeColors() {
   const root = document.documentElement;
-  const oddHex = APP.settings.rowColorOdd || '#2f2f2f';
-  const evenHex = APP.settings.rowColorEven || '#242424';
+  const oddHex = APP.settings.rowColorOdd || ThemeDefaults.settings.rowColorOdd;
+  const evenHex = APP.settings.rowColorEven || ThemeDefaults.settings.rowColorEven;
   root.style.setProperty('--row-odd', oddHex);
   root.style.setProperty('--row-even', evenHex);
 
@@ -12742,14 +12886,15 @@ function applyThemeColors() {
   const selectedG = Math.min(255, Math.round(brightest * 1.1) + 10);
   root.style.setProperty('--row-selected', grayToHex(selectedG));
   const cc = APP.settings.catColors || {};
-  root.style.setProperty('--cat-0', cc.cat0 || '#479EF5');
-  root.style.setProperty('--cat-1', cc.cat1 || '#CA50F7');
-  root.style.setProperty('--cat-2', cc.cat2 || '#48ca48');
-  root.style.setProperty('--cat-3', cc.cat3 || '#A0A220');
-  root.style.setProperty('--cat-4', cc.cat4 || '#FF5C5C');
-  root.style.setProperty('--cat-5', cc.cat5 || '#7fffff');
-  root.style.setProperty('--cat-6', cc.cat6 || '#ffff7f');
-  root.style.setProperty('--cat-misc', cc.catMisc || '#888888');
+  const cd = ThemeDefaults.settings.catColors;
+  root.style.setProperty('--cat-0', cc.cat0 || cd.cat0);
+  root.style.setProperty('--cat-1', cc.cat1 || cd.cat1);
+  root.style.setProperty('--cat-2', cc.cat2 || cd.cat2);
+  root.style.setProperty('--cat-3', cc.cat3 || cd.cat3);
+  root.style.setProperty('--cat-4', cc.cat4 || cd.cat4);
+  root.style.setProperty('--cat-5', cc.cat5 || cd.cat5);
+  root.style.setProperty('--cat-6', cc.cat6 || cd.cat6);
+  root.style.setProperty('--cat-misc', cc.catMisc || cd.catMisc);
 }
 
 function applyTypographySettings() {
@@ -12799,7 +12944,7 @@ function timeAgo(isoString) {
 function showUpdateNotification(data) {
   if (document.querySelector('.settings-popup')) return;
   const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:21px 27px;z-index:10000;box-shadow:0 6px 30px rgba(0,0,0,0.5);max-width:510px;cursor:pointer;pointer-events:auto';
+  toast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);padding:21px 27px;z-index:10000;box-shadow:0 6px 30px var(--dim-50);max-width:510px;cursor:pointer;pointer-events:auto';
   toast.innerHTML = `
     <div style="font-size:var(--fs-20);font-weight:600;color:var(--text-primary);margin-bottom:6px">Update Available: v${escapeHtml(data.version)}</div>
     <div style="font-size:var(--fs-16);color:var(--text-muted)">Open Settings to update</div>
@@ -12830,14 +12975,14 @@ function updateSettingsUpdateUI(data) {
       if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
       break;
     case 'up-to-date':
-      statusLine.innerHTML = '<span style="color:#4caf50">&#10003; You are up to date</span>';
+      statusLine.innerHTML = '<span style="color:var(--text-update-green)">&#10003; You are up to date</span>';
       if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
       break;
     case 'downloading':
       statusLine.innerHTML = `<span style="color:var(--text-muted)">Downloading... ${Math.round(data.percent || 0)}%</span>`;
       break;
     case 'downloaded':
-      statusLine.innerHTML = `<span style="color:#4caf50">&#10003; Update v${escapeHtml(data.version)} ready to install</span>`;
+      statusLine.innerHTML = `<span style="color:var(--text-update-green)">&#10003; Update v${escapeHtml(data.version)} ready to install</span>`;
       if (btnDownload) btnDownload.style.display = 'none';
       if (btnInstall) btnInstall.style.display = '';
       break;
@@ -13473,7 +13618,7 @@ function openSettingsPopup() {
             <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
               <button class="btn-sm btn-primary" id="btn-check-update" style="font-size:var(--fs-11)">Check for Updates</button>
               <button class="btn-sm" id="btn-download-update" style="font-size:var(--fs-11);display:none">Download Update</button>
-              <button class="btn-sm" id="btn-install-update" style="font-size:var(--fs-11);display:none;background:#1a5c1a;color:#4caf50;border-color:#4caf50">Restart to Update</button>
+              <button class="btn-sm" id="btn-install-update" style="font-size:var(--fs-11);display:none;background:var(--btn-success);color:var(--text-update-green);border-color:var(--text-update-green)">Restart to Update</button>
               <a id="btn-github-releases" href="#" style="font-size:var(--fs-11);color:var(--accent);text-decoration:none;margin-left:auto">View releases on GitHub &#x2197;</a>
             </div>
           </div>
@@ -13514,16 +13659,10 @@ function openSettingsPopup() {
               <div class="settings-desc">Colors used for category tabs and field labels</div>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-              ${[
-                ['cat0', 'Geography', '#479EF5'],
-                ['cat1', 'Taxonomy', '#CA50F7'],
-                ['cat2', 'Collecting', '#48ca48'],
-                ['cat3', 'Locality', '#A0A220'],
-                ['cat4', 'Cat 5', '#FF5C5C'],
-                ['cat5', 'Cat 6', '#7fffff'],
-                ['cat6', 'Cat 7', '#ffff7f'],
-                ['catMisc', 'Misc', '#888888'],
-              ].map(([key, label, def]) => `
+              ${ThemeDefaults.categoryLabels.map(([key, label]) => {
+                const def = ThemeDefaults.settings.catColors[key];
+                return [key, label, def];
+              }).map(([key, label, def]) => `
                 <label style="display:flex;align-items:center;gap:4px;font-size:var(--fs-11);color:var(--text-secondary)">
                   <input type="color" class="setting-cat-color" data-key="${key}" value="${(APP.settings.catColors && APP.settings.catColors[key]) || def}" style="width:28px;height:22px;border:none;background:none;cursor:pointer;padding:0">
                   ${label}
@@ -13588,7 +13727,7 @@ function openSettingsPopup() {
           <img src="icons/danger.svg" alt="" style="width:16px;height:16px;filter:brightness(0) saturate(100%) invert(40%) sepia(90%) saturate(2000%) hue-rotate(345deg)">
           <span style="font-size:var(--fs-13);font-weight:600;color:var(--error)">Danger Zone</span>
         </div>
-        <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:var(--fs-11)">Reset Project</button>
+        <button class="btn-sm" id="settings-reset-project" style="background:var(--btn-danger);color:var(--error);border-color:var(--error);font-size:var(--fs-11)">Reset Project</button>
       </div>
 
       </div>
@@ -13714,12 +13853,12 @@ function openSettingsPopup() {
     applyThemeColors();
   });
   document.getElementById('setting-row-reset').addEventListener('click', () => {
-    APP.settings.rowColorOdd = '#2f2f2f';
-    APP.settings.rowColorEven = '#242424';
-    document.getElementById('setting-row-odd').value = 47;
-    document.getElementById('setting-row-even').value = 36;
-    document.getElementById('setting-row-odd-preview').style.background = '#2f2f2f';
-    document.getElementById('setting-row-even-preview').style.background = '#242424';
+    APP.settings.rowColorOdd = ThemeDefaults.settings.rowColorOdd;
+    APP.settings.rowColorEven = ThemeDefaults.settings.rowColorEven;
+    document.getElementById('setting-row-odd').value = hexToGray(ThemeDefaults.settings.rowColorOdd);
+    document.getElementById('setting-row-even').value = hexToGray(ThemeDefaults.settings.rowColorEven);
+    document.getElementById('setting-row-odd-preview').style.background = ThemeDefaults.settings.rowColorOdd;
+    document.getElementById('setting-row-even-preview').style.background = ThemeDefaults.settings.rowColorEven;
     applyThemeColors();
   });
 
@@ -13732,11 +13871,10 @@ function openSettingsPopup() {
     });
   });
 
-  const catDefaults = { cat0: '#479EF5', cat1: '#CA50F7', cat2: '#48CA48', cat3: '#A0A220', cat4: '#FF5C5C', cat5: '#7fffff', cat6: '#ffff7f', catMisc: '#888888' };
   document.getElementById('setting-cat-reset').addEventListener('click', () => {
-    APP.settings.catColors = { ...catDefaults };
+    APP.settings.catColors = { ...ThemeDefaults.settings.catColors };
     document.querySelectorAll('.setting-cat-color').forEach(input => {
-      input.value = catDefaults[input.dataset.key];
+      input.value = ThemeDefaults.settings.catColors[input.dataset.key];
     });
     applyThemeColors();
   });
@@ -13807,7 +13945,7 @@ function showResetProjectDialog() {
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn-sm" id="reset-cancel">Cancel</button>
-        <button class="btn-sm" id="reset-confirm" style="background:var(--error);color:#fff;border-color:var(--error);font-weight:700">Delete All &amp; Reset</button>
+        <button class="btn-sm" id="reset-confirm" style="background:var(--error);color:var(--surface-white);border-color:var(--error);font-weight:700">Delete All &amp; Reset</button>
       </div>
     </div>
   `;
@@ -13838,7 +13976,7 @@ async function performProjectReset() {
   updateRewindButton();
   APP.state = { version: 1, folder_path: APP.folderPath, specimens: {} };
   APP.project = null;
-  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: '#2f2f2f', rowColorEven: '#242424', catColors: {}, fontFamily: 'atkinson', fontScale: 1.0, italicEmphasis: true };
+  APP.settings = { acceptAllEnabled: false, confirmRecordsEnabled: true, mapTheme: 'light', rowColorOdd: ThemeDefaults.settings.rowColorOdd, rowColorEven: ThemeDefaults.settings.rowColorEven, catColors: {}, fontFamily: 'atkinson', fontScale: 1.0, italicEmphasis: true };
   APP.currentIndex = 0;
 
   // Re-load folder from scratch (re-acquires lock, validates prompt, etc.)

@@ -110,6 +110,7 @@ function parsePromptYaml(rawYaml, promptName) {
     instructions: doc.instructions || '',
     checklist: doc.checklist || [],
     review_not_required: doc.review_not_required || [],
+    field_default_values: doc.field_default_values || {},
     raw: rawYaml
   };
 }

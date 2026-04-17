@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
+const ThemeDefaults = require('../shared/theme-defaults');
+
 const INPROGRESS_DIR = '_INPROGRESS';
 const SETTINGS_FILENAME = '_settings.json';
 // Legacy path (for migration detection)
@@ -11,19 +13,10 @@ const DEFAULT_SETTINGS = {
   version: 1,
   acceptAllEnabled: false,
   mapTheme: 'dark',
-  rowColorOdd: '#2f2f2f',
-  rowColorEven: '#242424',
+  rowColorOdd: ThemeDefaults.settings.rowColorOdd,
+  rowColorEven: ThemeDefaults.settings.rowColorEven,
   imageCacheSize: 2000,
-  catColors: {
-    cat0: '#479EF5',
-    cat1: '#CA50F7',
-    cat2: '#48CA48',
-    cat3: '#A0A220',
-    cat4: '#FF5C5C',
-    cat5: '#7fffff',
-    cat6: '#ffff7f',
-    catMisc: '#888888',
-  },
+  catColors: { ...ThemeDefaults.settings.catColors },
   lastUpdateCheck: null,
   installDate: null,
   fontFamily: 'atkinson',

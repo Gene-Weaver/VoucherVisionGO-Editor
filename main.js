@@ -8,6 +8,7 @@ const stateManager = require('./src/backend/state-manager');
 const promptCache = require('./src/backend/prompt-cache');
 const imageDecoder = require('./src/backend/image-decoder');
 const settingsManager = require('./src/backend/settings-manager');
+const ThemeDefaults = require('./src/shared/theme-defaults');
 const historyManager = require('./src/backend/history-manager');
 const inprogressManager = require('./src/backend/inprogress-manager');
 const projectManager = require('./src/backend/project-manager');
@@ -110,7 +111,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     title: 'VoucherVisionGO Editor',
-    backgroundColor: '#1a1a1a',
+    backgroundColor: ThemeDefaults.colors.bg.primary,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
