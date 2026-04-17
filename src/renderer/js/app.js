@@ -13236,7 +13236,7 @@ function openSettingsPopup() {
       <div style="display:flex;gap:20px;margin-bottom:16px">
 
         <!-- Left column -->
-        <div style="flex:1;display:flex;flex-direction:column;gap:0">
+        <div style="flex:7;display:flex;flex-direction:column;gap:0">
 
           <div class="settings-row">
             <div class="settings-label">
@@ -13304,7 +13304,7 @@ function openSettingsPopup() {
         </div>
 
         <!-- Right column -->
-        <div style="flex:1;display:flex;flex-direction:column;gap:0">
+        <div style="flex:3;display:flex;flex-direction:column;gap:0">
 
           <div class="settings-row" id="settings-update-section" style="flex-direction:column;align-items:stretch">
             <div class="settings-label" style="margin-bottom:10px">
@@ -13407,7 +13407,7 @@ function openSettingsPopup() {
                   <div class="font-picker-option" data-value="opendyslexic" style="padding:6px 8px;cursor:pointer;font-size:var(--fs-12);white-space:nowrap">OpenDyslexic</div>
                 </div>
               </div>
-              <span id="font-preview-text" style="font-size:var(--fs-12);color:var(--text-secondary);white-space:nowrap">| Do you want to use this font for the VoucherVisionGO-Editor?</span>
+              <span id="font-preview-text" style="font-size:var(--fs-12);color:var(--text-secondary);white-space:nowrap"> Do you want to use this font for the VoucherVisionGO-Editor?</span>
             </div>
             <div style="display:flex;align-items:center;gap:12px">
               <label style="font-size:var(--fs-11);color:var(--text-secondary);min-width:70px">Font Scale</label>
@@ -13419,7 +13419,11 @@ function openSettingsPopup() {
         </div>
       </details>
 
-      <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+          <img src="icons/danger.svg" alt="" style="width:16px;height:16px;filter:brightness(0) saturate(100%) invert(40%) sepia(90%) saturate(2000%) hue-rotate(345deg)">
+          <span style="font-size:var(--fs-13);font-weight:600;color:var(--error)">Danger Zone</span>
+        </div>
         <button class="btn-sm" id="settings-reset-project" style="background:#3a1515;color:var(--error);border-color:var(--error);font-size:var(--fs-11)">Reset Project</button>
       </div>
 
