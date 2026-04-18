@@ -398,6 +398,9 @@ function openRewindPopup() {
   let selectedCount = 1; // default: rewind 1 action
 
   function render() {
+    // Preserve timeline scroll position across re-renders
+    const prevScrollTop = overlay.querySelector('.rewind-timeline')?.scrollTop || 0;
+
     overlay.innerHTML = `
       <div class="rewind-popup" onclick="event.stopPropagation()">
         <div class="rewind-header">
@@ -449,6 +452,10 @@ function openRewindPopup() {
       close();
       showRewindConfirmation(selectedCount);
     });
+
+    // Restore scroll position after DOM rebuild
+    const timeline = overlay.querySelector('.rewind-timeline');
+    if (timeline) timeline.scrollTop = prevScrollTop;
   }
 
   render();
