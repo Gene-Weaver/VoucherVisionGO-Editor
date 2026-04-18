@@ -1093,7 +1093,6 @@ textarea { resize: vertical; min-height: 60px; }
   pointer-events: none;
 }
 
-.null-default-icon.active,
 .null-default-btn:hover .null-default-icon {
   background-color: var(--accent);
 }
@@ -6447,6 +6446,137 @@ textarea { resize: vertical; min-height: 60px; }
   padding: 14px 20px 18px;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
+}
+
+/* ── Null Default Batch popup (split-pane) ───────────────── */
+
+.null-default-batch-popup {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: min(1320px, calc(100vw - 32px));
+  max-width: 97vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  cursor: default;
+  overflow: hidden;
+}
+
+.null-default-batch-layout {
+  display: grid;
+  grid-template-columns: minmax(480px, 1fr) minmax(400px, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.null-default-batch-cards {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.null-default-batch-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.null-default-batch-preview .focus-image-reference-meta {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+
+.null-default-batch-preview .wfo-reference-images {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.null-default-batch-preview .wfo-reference-images img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.null-default-card-specimens {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.null-default-card-specimens > summary {
+  cursor: pointer;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  padding: 4px 2px;
+  user-select: none;
+}
+
+.null-default-card-specimens > summary:hover {
+  color: var(--text-primary);
+}
+
+.null-default-specimen-list {
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.null-default-batch-toggle-row,
+.image-viewer-toggle-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.null-default-specimen-include {
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.null-default-specimen-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--fs-11);
+}
+
+.null-default-specimen-row:hover {
+  background: var(--bg-hover);
+}
+
+.null-default-specimen-row.active {
+  background: var(--blue-tint-08);
+}
+
+.null-default-specimen-filename {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
 }
 
 .wfo-map-popup,

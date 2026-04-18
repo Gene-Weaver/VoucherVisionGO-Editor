@@ -2585,21 +2585,11 @@ function handleNullCycleHotkey() {
 
   if (APP.currentView === 'review') {
     acceptField(fieldName, newValue, 'edited');
-    updateNullDefaultActiveIcon(fieldName, _nullCycleIndex);
   } else if (APP.currentView === 'table') {
     applyNullDefaultToTableCell(fieldName, newValue);
   } else if (APP.currentView === 'focus') {
     applyNullDefaultToFocusField(fieldName, newValue);
   }
-}
-
-function updateNullDefaultActiveIcon(fieldName, activeIndex) {
-  const btn = document.querySelector(`.null-default-btn[data-field="${fieldName}"]`);
-  if (!btn) return;
-  btn.querySelectorAll('.null-default-icon').forEach(icon => {
-    const idx = parseInt(icon.dataset.idx, 10);
-    icon.classList.toggle('active', idx <= activeIndex);
-  });
 }
 
 function applyNullDefaultToTableCell(fieldName, newValue) {
@@ -6185,6 +6175,7 @@ function showAttributionEditorPopup(attributionFields) {
 
   let activeFilename = rows[0]?.filename || null;
   let imageType = tableImageType;
+  let zoomMode = tableImageZoomMode;
   let editorMode = 'dnd'; // 'dnd' or 'preview'
 
   // Build header labels
@@ -6209,9 +6200,12 @@ function showAttributionEditorPopup(attributionFields) {
       </div>
       <div class="attribution-editor-resize" id="attribution-editor-resize"></div>
       <div class="attribution-editor-preview" id="attribution-editor-right">
-        <div class="cluster-gallery-toggle" id="attribution-preview-toggle"></div>
+        <div class="cluster-gallery-toggle image-viewer-toggle-row">
+          <div id="attribution-preview-toggle"></div>
+          <div id="attribution-preview-zoom-toggle"></div>
+        </div>
         <div class="attribution-preview-filename" id="attribution-preview-filename"></div>
-        <div class="wfo-reference-images" id="attribution-preview-image">
+        <div class="wfo-reference-images image-fit-mode" id="attribution-preview-image">
           <div class="table-image-placeholder">Select a specimen</div>
         </div>
       </div>
@@ -6359,6 +6353,19 @@ function showAttributionEditorPopup(attributionFields) {
   const toggleContainer = popup.overlay.querySelector('#attribution-preview-toggle');
   if (toggleContainer) { toggleContainer.innerHTML = sw.html; sw.setup(); }
 
+  // Setup fit/zoom toggle
+  const zoomSwitchId = `attr-zoom-switch-${Date.now()}`;
+  const zoomSw = createSlideSwitch(zoomSwitchId, [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('attribution-preview-image', val);
+  });
+  const zoomToggleContainer = popup.overlay.querySelector('#attribution-preview-zoom-toggle');
+  if (zoomToggleContainer) { zoomToggleContainer.innerHTML = zoomSw.html; zoomSw.setup(); }
+
   // Setup mode toggle (Drag and Drop / Preview Literal Entries)
   const modeSwitchId = `attr-mode-switch-${Date.now()}`;
   const modeSw = createSlideSwitch(modeSwitchId, [
@@ -6391,6 +6398,7 @@ function showAttributionEditorPopup(attributionFields) {
     imgEl.innerHTML = dataUrl
       ? `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeFilename))}">`
       : '<div class="table-image-placeholder">No image available</div>';
+    applyImageZoomMode('attribution-preview-image', zoomMode);
   }
 
   function reconstructFieldValue(names) {
@@ -6893,6 +6901,7 @@ function showDateFormatsReviewPopup(selectedField = '') {
   const allItems = analysis.formats.flatMap(format => format.items);
   let activeIndex = allItems[0]?.index ?? -1;
   let imageType = tableImageType;
+  let zoomMode = tableImageZoomMode;
   const refreshPopup = () => {
     popup.close();
     showDateFormatsReviewPopup(field);
@@ -6904,12 +6913,15 @@ function showDateFormatsReviewPopup(selectedField = '') {
     bodyHtml: `
       <div class="date-review-groups" id="date-format-review-list"></div>
       <div class="date-review-preview-pane">
-        <div class="cluster-gallery-toggle" id="date-format-review-toggle"></div>
+        <div class="cluster-gallery-toggle image-viewer-toggle-row">
+          <div id="date-format-review-toggle"></div>
+          <div id="date-format-review-zoom-toggle"></div>
+        </div>
         <div class="focus-image-reference-meta">
           <div class="focus-image-reference-field">${escapeHtml(field || '')}</div>
           <div class="focus-image-reference-value" id="date-format-review-value"><span class="cell-empty-placeholder">${field ? 'Select a specimen' : 'Select a field'}</span></div>
         </div>
-        <div class="wfo-reference-images" id="date-format-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
+        <div class="wfo-reference-images image-fit-mode" id="date-format-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
       </div>
     `,
     headerRightHtml: getPopupFieldSelectorHtml('date-format-review-field', field, {
@@ -7091,6 +7103,7 @@ function showDateFormatsReviewPopup(selectedField = '') {
     } else {
       imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
     }
+    applyImageZoomMode('date-format-review-image', zoomMode);
   };
 
   const switchControl = createSlideSwitch('date-format-review-image-switch', [
@@ -7104,6 +7117,20 @@ function showDateFormatsReviewPopup(selectedField = '') {
   if (switchContainer) {
     switchContainer.innerHTML = switchControl.html;
     switchControl.setup();
+  }
+
+  const zoomSwitchControl = createSlideSwitch('date-format-review-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('date-format-review-image', val);
+  });
+  const zoomSwitchContainer = popup.overlay.querySelector('#date-format-review-zoom-toggle');
+  if (zoomSwitchContainer) {
+    zoomSwitchContainer.innerHTML = zoomSwitchControl.html;
+    zoomSwitchControl.setup();
   }
 
   renderGroups();
@@ -7121,6 +7148,7 @@ function showDateViolationsReviewPopup(selectedField = '') {
   const allItems = [...violations.swapped, ...violations.tooOld, ...violations.future];
   let activeIndex = allItems[0]?.index ?? -1;
   let imageType = tableImageType;
+  let zoomMode = tableImageZoomMode;
   const refreshPopup = () => {
     popup.close();
     showDateViolationsReviewPopup(field);
@@ -7138,12 +7166,15 @@ function showDateViolationsReviewPopup(selectedField = '') {
     bodyHtml: `
       <div class="date-review-groups" id="date-violation-review-list"></div>
       <div class="date-review-preview-pane">
-        <div class="cluster-gallery-toggle" id="date-violation-review-toggle"></div>
+        <div class="cluster-gallery-toggle image-viewer-toggle-row">
+          <div id="date-violation-review-toggle"></div>
+          <div id="date-violation-review-zoom-toggle"></div>
+        </div>
         <div class="focus-image-reference-meta">
           <div class="focus-image-reference-field">${escapeHtml(field || '')}</div>
           <div class="focus-image-reference-value" id="date-violation-review-value"><span class="cell-empty-placeholder">${field ? 'Select a specimen' : 'Select a field'}</span></div>
         </div>
-        <div class="wfo-reference-images" id="date-violation-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
+        <div class="wfo-reference-images image-fit-mode" id="date-violation-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
       </div>
     `,
     headerRightHtml: getPopupFieldSelectorHtml('date-violation-review-field', field, {
@@ -7319,6 +7350,7 @@ function showDateViolationsReviewPopup(selectedField = '') {
     } else {
       imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
     }
+    applyImageZoomMode('date-violation-review-image', zoomMode);
   };
 
   const switchControl = createSlideSwitch('date-violation-review-image-switch', [
@@ -7332,6 +7364,20 @@ function showDateViolationsReviewPopup(selectedField = '') {
   if (switchContainer) {
     switchContainer.innerHTML = switchControl.html;
     switchControl.setup();
+  }
+
+  const zoomSwitchControl = createSlideSwitch('date-violation-review-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('date-violation-review-image', val);
+  });
+  const zoomSwitchContainer = popup.overlay.querySelector('#date-violation-review-zoom-toggle');
+  if (zoomSwitchContainer) {
+    zoomSwitchContainer.innerHTML = zoomSwitchControl.html;
+    zoomSwitchControl.setup();
   }
 
   renderGroups();
@@ -7677,6 +7723,7 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
   const noMismatchRows = rows.filter(row => row.mismatchCount === 0);
   let activeIndex = options.activeIndex ?? -1;
   let imageType = options.imageType || tableImageType;
+  let zoomMode = tableImageZoomMode;
   let showNoMismatchRows = !!options.showNoMismatchRows;
 
   const popup = createFocusToolPopup({
@@ -7698,8 +7745,11 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
         <div class="ocr-review-list" id="ocr-review-list"></div>
       </div>
       <div class="ocr-review-right">
-        <div class="ocr-review-toggle" id="ocr-review-toggle"></div>
-        <div class="ocr-review-image" id="ocr-review-image"><div class="table-image-placeholder">${field ? 'Loading...' : 'Select a field'}</div></div>
+        <div class="ocr-review-toggle image-viewer-toggle-row">
+          <div id="ocr-review-toggle"></div>
+          <div id="ocr-review-zoom-toggle"></div>
+        </div>
+        <div class="ocr-review-image image-fit-mode" id="ocr-review-image"><div class="table-image-placeholder">${field ? 'Loading...' : 'Select a field'}</div></div>
         <div class="ocr-review-ocr">
           <div class="focus-review-toolbar"><span class="focus-review-toolbar-note" id="ocr-review-ocr-title">OCR text</span></div>
           <div class="scrollable-content ocr-text" id="ocr-review-ocr-text"></div>
@@ -7882,6 +7932,7 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
       } else {
         imageEl.innerHTML = '<div class="table-image-placeholder">No image</div>';
       }
+      applyImageZoomMode('ocr-review-image', zoomMode);
     }
   };
 
@@ -7939,6 +7990,20 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
     switchControl.setup();
   }
 
+  const zoomSwitchControl = createSlideSwitch('ocr-review-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('ocr-review-image', val);
+  });
+  const zoomSwitchContainer = popup.overlay.querySelector('#ocr-review-zoom-toggle');
+  if (zoomSwitchContainer) {
+    zoomSwitchContainer.innerHTML = zoomSwitchControl.html;
+    zoomSwitchControl.setup();
+  }
+
   popup.overlay.querySelector('#ocr-review-close')?.addEventListener('click', popup.close);
   popup.overlay.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
@@ -7962,6 +8027,7 @@ function showElevationDiscrepancyPopup(selectedField = '') {
   const groups = analysis.groups;
   let activeIndex = items[0]?.index ?? -1;
   let imageType = tableImageType;
+  let zoomMode = tableImageZoomMode;
   const refreshPopup = () => {
     popup.close();
     showElevationDiscrepancyPopup(field);
@@ -8008,8 +8074,11 @@ function showElevationDiscrepancyPopup(selectedField = '') {
             </div>
           </div>
         </div>
-        <div class="cluster-gallery-toggle" id="elevation-review-toggle"></div>
-        <div class="wfo-reference-images" id="elevation-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
+        <div class="cluster-gallery-toggle image-viewer-toggle-row">
+          <div id="elevation-review-toggle"></div>
+          <div id="elevation-review-zoom-toggle"></div>
+        </div>
+        <div class="wfo-reference-images image-fit-mode" id="elevation-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
       </div>
     `,
     headerRightHtml: getPopupFieldSelectorHtml('elevation-review-field', field, {
@@ -8227,6 +8296,7 @@ function showElevationDiscrepancyPopup(selectedField = '') {
     } else {
       imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
     }
+    applyImageZoomMode('elevation-review-image', zoomMode);
   };
 
   const switchControl = createSlideSwitch('elevation-review-image-switch', [
@@ -8240,6 +8310,20 @@ function showElevationDiscrepancyPopup(selectedField = '') {
   if (switchContainer) {
     switchContainer.innerHTML = switchControl.html;
     switchControl.setup();
+  }
+
+  const zoomSwitchControl = createSlideSwitch('elevation-review-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' }
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('elevation-review-image', val);
+  });
+  const zoomSwitchContainer = popup.overlay.querySelector('#elevation-review-zoom-toggle');
+  if (zoomSwitchContainer) {
+    zoomSwitchContainer.innerHTML = zoomSwitchControl.html;
+    zoomSwitchControl.setup();
   }
 
   renderList();
@@ -9424,6 +9508,367 @@ async function applyVoucherVisionBatchChoices(choices) {
   scheduleSaveState(affectedFilenames);
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
+}
+
+// ── Batch-Apply Null Defaults ──────────────────────────────
+
+function getFieldsWithNullDefaults() {
+  const defaults = APP.currentPrompt?.field_default_values || {};
+  return Object.keys(defaults).filter(f => Array.isArray(defaults[f]) && defaults[f].length > 0);
+}
+
+function renderNullDefaultBatchSection() {
+  const container = document.getElementById('focus-null-default-batch-list');
+  if (!container) return;
+  if (focusToolCategory !== 'vouchervision') { container.innerHTML = ''; return; }
+
+  const fields = getFieldsWithNullDefaults();
+
+  container.innerHTML = renderFocusToolLauncher({
+    description: 'Stage prompt-defined null default values for fields where the VoucherVision AI value is empty. Changes are staged as unconfirmed so you can review them.',
+    summaryItems: [
+      `${fields.length} field${fields.length !== 1 ? 's' : ''} with defaults`,
+      `${APP.specimens.length} specimen${APP.specimens.length !== 1 ? 's' : ''}`
+    ],
+    buttonId: 'btn-open-null-default-batch',
+    buttonLabel: 'Open Batch-Apply Null Defaults',
+    disabled: fields.length === 0,
+    note: fields.length === 0
+      ? 'No field_default_values defined in the prompt.'
+      : 'Specimens whose AI already has a value are left untouched. For fields with multiple defaults you will pick one (or skip).'
+  });
+
+  document.getElementById('btn-open-null-default-batch')?.addEventListener('click', () => showNullDefaultBatchPopup());
+}
+
+async function showNullDefaultBatchPopup(initialChoices = null) {
+  const fields = getFieldsWithNullDefaults();
+  if (fields.length === 0) return;
+
+  await ensureAllSpecimensCached();
+  const defaults = APP.currentPrompt.field_default_values;
+
+  // Pre-compute eligible specimens per field (AI value is empty).
+  // Each entry has { index, filename } so we can render quicktools.
+  const eligibleByField = {};
+  for (const field of fields) {
+    const rows = [];
+    APP.specimens.forEach((spec, index) => {
+      const ai = tableDataCache[spec.filename]?.formatted_json?.[field];
+      if (ai === undefined || String(ai) === '') {
+        rows.push({ index, filename: spec.filename });
+      }
+    });
+    eligibleByField[field] = rows;
+  }
+
+  // Build initial choice state: single-default = apply that value, multi-default = skip
+  const choices = Object.fromEntries(fields.map(field => {
+    const vals = defaults[field];
+    const initial = initialChoices?.[field];
+    if (initial) {
+      return [field, { mode: initial.mode, value: initial.value }];
+    }
+    if (vals.length === 1) {
+      return [field, { mode: 'apply', value: vals[0] }];
+    }
+    return [field, { mode: 'skip', value: '' }];
+  }));
+
+  // Per-field set of filenames the user has explicitly unchecked. Default: all eligible specimens included.
+  const excludedByField = Object.fromEntries(fields.map(f => [f, new Set()]));
+
+  const countIncluded = (field) => {
+    const eligible = eligibleByField[field];
+    const excluded = excludedByField[field];
+    return eligible.filter(item => !excluded.has(item.filename)).length;
+  };
+
+  const renderHelper = (field) => {
+    const choice = choices[field];
+    const eligible = eligibleByField[field].length;
+    const included = countIncluded(field);
+    if (choice.mode === 'skip') return 'Skipped — no changes for this field.';
+    if (eligible === 0) return `No specimens have an empty AI value for this field.`;
+    const excludedCount = eligible - included;
+    const excludedNote = excludedCount > 0 ? ` (${excludedCount} unchecked)` : '';
+    return `Will stage "${choice.value}" on ${included} of ${eligible} specimen${eligible !== 1 ? 's' : ''}${excludedNote}.`;
+  };
+
+  // Preview state
+  let activeFilename = null;
+  let imageType = tableImageType;
+  let zoomMode = tableImageZoomMode;
+
+  const buildCardsHtml = () => fields.map(field => {
+    const vals = defaults[field];
+    const choice = choices[field];
+    const eligible = eligibleByField[field];
+    const excluded = excludedByField[field];
+    const valueButtons = vals.map((v, i) => `
+      <button class="btn-sm vv-batch-choice ${choice.mode === 'apply' && choice.value === v ? 'active' : ''}" type="button" data-field="${escapeAttr(field)}" data-mode="apply" data-value="${escapeAttr(v)}" data-value-idx="${i}">${escapeHtml(v)}</button>
+    `).join('');
+    const specimenRows = eligible.map(item => `
+      <div class="null-default-specimen-row${item.filename === activeFilename ? ' active' : ''}" data-filename="${escapeAttr(item.filename)}" data-field="${escapeAttr(field)}">
+        <input type="checkbox" class="null-default-specimen-include" data-filename="${escapeAttr(item.filename)}" data-field="${escapeAttr(field)}" ${excluded.has(item.filename) ? '' : 'checked'} title="Include this specimen">
+        ${renderPopupQuickTools(item, {
+          tool: 'nullDefaults',
+          statusField: field,
+          photoFieldLabel: field,
+          photoFieldValue: '',
+        })}
+        <span class="null-default-specimen-filename">${escapeHtml(getDisplayFilename(item.filename))}</span>
+      </div>
+    `).join('');
+    return `
+      <div class="vv-batch-card" data-field="${escapeAttr(field)}">
+        <div class="vv-batch-card-header">
+          <span class="vv-batch-field-name">${escapeHtml(field)}</span>
+          <span class="vv-batch-field-tag">${vals.length} default${vals.length !== 1 ? 's' : ''} · ${eligible.length} empty</span>
+        </div>
+        <div class="vv-batch-card-options">
+          ${valueButtons}
+          <button class="btn-sm vv-batch-choice ${choice.mode === 'skip' ? 'active' : ''}" type="button" data-field="${escapeAttr(field)}" data-mode="skip">Skip</button>
+        </div>
+        <div class="vv-batch-helper" data-field="${escapeAttr(field)}">${escapeHtml(renderHelper(field))}</div>
+        ${eligible.length > 0 ? `
+          <details class="null-default-card-specimens">
+            <summary>${eligible.length} eligible specimen${eligible.length !== 1 ? 's' : ''}</summary>
+            <div class="null-default-specimen-list">${specimenRows}</div>
+          </details>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'image-modal-overlay';
+  overlay.style.cursor = 'default';
+  overlay.innerHTML = `
+    <div class="null-default-batch-popup" onclick="event.stopPropagation()">
+      <div class="name-parser-header">
+        <div class="focus-popup-title-block">
+          <div class="focus-popup-title">Batch-Apply Null Defaults</div>
+          <div class="tool-instructions">Stage a prompt-defined default value on specimens whose VoucherVision AI value for the field is empty. Specimens that already have an AI value are left untouched. All staged changes appear as <strong>unconfirmed</strong> for review.</div>
+        </div>
+        ${popupCloseBtnHtml('null-default-batch-close')}
+      </div>
+      <div class="vv-batch-summary">
+        <span>${fields.length} field${fields.length !== 1 ? 's' : ''}</span>
+        <span>${APP.specimens.length} specimen${APP.specimens.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="null-default-batch-layout">
+        <div class="null-default-batch-cards" id="null-default-batch-list">${buildCardsHtml()}</div>
+        <div class="null-default-batch-preview">
+          <div class="cluster-gallery-toggle null-default-batch-toggle-row">
+            <div id="null-default-batch-toggle"></div>
+            <div id="null-default-batch-zoom-toggle"></div>
+          </div>
+          <div class="focus-image-reference-meta">
+            <div class="focus-image-reference-field" id="null-default-batch-meta">Select a specimen row</div>
+          </div>
+          <div class="wfo-reference-images image-fit-mode" id="null-default-batch-image"><div class="table-image-placeholder">Select a specimen from a card to preview its image</div></div>
+        </div>
+      </div>
+      <div class="vv-batch-footer">
+        <button class="btn-sm" id="null-default-batch-cancel">Cancel</button>
+        <button class="btn-sm btn-primary" id="null-default-batch-apply">Apply Choices</button>
+      </div>
+    </div>
+  `;
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', close);
+  document.body.appendChild(overlay);
+  overlay.querySelector('#null-default-batch-close')?.addEventListener('click', close);
+  overlay.querySelector('#null-default-batch-cancel')?.addEventListener('click', close);
+
+  // Collage/original toggle
+  const switchControl = createSlideSwitch('null-default-batch-image-switch', [
+    { value: 'collage', label: 'Collage' },
+    { value: 'original', label: 'Original' },
+  ], imageType, (val) => {
+    imageType = val;
+    loadPreview();
+  });
+  const switchContainer = overlay.querySelector('#null-default-batch-toggle');
+  if (switchContainer) {
+    switchContainer.innerHTML = switchControl.html;
+    switchControl.setup();
+  }
+
+  // Fit/zoom toggle
+  const zoomSwitchControl = createSlideSwitch('null-default-batch-zoom-switch', [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' },
+  ], zoomMode, (val) => {
+    zoomMode = val;
+    tableImageZoomMode = val;
+    applyImageZoomMode('null-default-batch-image', val);
+  });
+  const zoomSwitchContainer = overlay.querySelector('#null-default-batch-zoom-toggle');
+  if (zoomSwitchContainer) {
+    zoomSwitchContainer.innerHTML = zoomSwitchControl.html;
+    zoomSwitchControl.setup();
+  }
+
+  const loadPreview = async () => {
+    const imageEl = overlay.querySelector('#null-default-batch-image');
+    const metaEl = overlay.querySelector('#null-default-batch-meta');
+    if (!imageEl) return;
+    if (!activeFilename) {
+      imageEl.innerHTML = '<div class="table-image-placeholder">Select a specimen from a card to preview its image</div>';
+      if (metaEl) metaEl.textContent = 'Select a specimen row';
+      return;
+    }
+    if (metaEl) metaEl.textContent = getDisplayFilename(activeFilename);
+    imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
+    const dataUrl = await window.api.getImage(APP.folderPath, activeFilename, imageType, 'full');
+    if (!imageEl.isConnected) return;
+    if (dataUrl) {
+      imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeFilename))}">`;
+      imageEl.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
+    } else {
+      imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
+    }
+    applyImageZoomMode('null-default-batch-image', zoomMode);
+  };
+
+  const wireCardHandlers = () => {
+    const listEl = overlay.querySelector('#null-default-batch-list');
+    if (!listEl) return;
+
+    // Checkbox handlers (toggle per-specimen inclusion)
+    listEl.querySelectorAll('.null-default-specimen-include').forEach(cb => {
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const field = cb.dataset.field;
+        const filename = cb.dataset.filename;
+        if (cb.checked) {
+          excludedByField[field].delete(filename);
+        } else {
+          excludedByField[field].add(filename);
+        }
+        const card = cb.closest('.vv-batch-card');
+        const helper = card?.querySelector('.vv-batch-helper');
+        if (helper) helper.textContent = renderHelper(field);
+      });
+    });
+
+    // Choice button handlers (scope to card-options only, avoid catching specimen-row clicks)
+    listEl.querySelectorAll('.vv-batch-card-options .vv-batch-choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const field = btn.dataset.field;
+        const mode = btn.dataset.mode;
+        if (mode === 'apply') {
+          choices[field] = { mode: 'apply', value: btn.dataset.value };
+        } else {
+          choices[field] = { mode: 'skip', value: '' };
+        }
+        const card = btn.closest('.vv-batch-card');
+        card.querySelectorAll('.vv-batch-card-options .vv-batch-choice').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const helper = card.querySelector('.vv-batch-helper');
+        if (helper) helper.textContent = renderHelper(field);
+      });
+    });
+
+    // Specimen row click → update preview
+    listEl.querySelectorAll('.null-default-specimen-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.popup-quicktools button, .popup-quicktools-photo, .popup-quicktools-goto, .ocr-review-flag, .null-default-specimen-include')) return;
+        activeFilename = row.dataset.filename;
+        listEl.querySelectorAll('.null-default-specimen-row.active').forEach(r => r.classList.remove('active'));
+        row.classList.add('active');
+        loadPreview();
+      });
+    });
+
+    // Wire quicktools (image popup, flag, goto); flag toggle triggers a list re-render
+    // so the flag button's red/gray state updates immediately.
+    wirePopupQuickTools(listEl, { closeFn: close, onFlagRefresh: renderList });
+  };
+
+  const renderList = () => {
+    const listEl = overlay.querySelector('#null-default-batch-list');
+    if (!listEl) return;
+    // Preserve which <details> were open before re-render
+    const openFields = new Set(
+      Array.from(listEl.querySelectorAll('details.null-default-card-specimens[open]'))
+        .map(el => el.closest('.vv-batch-card')?.dataset.field)
+        .filter(Boolean)
+    );
+    listEl.innerHTML = buildCardsHtml();
+    openFields.forEach(field => {
+      const detailsEl = listEl.querySelector(`.vv-batch-card[data-field="${escapeAttr(field)}"] details.null-default-card-specimens`);
+      if (detailsEl) detailsEl.open = true;
+    });
+    wireCardHandlers();
+  };
+
+  wireCardHandlers();
+
+  overlay.querySelector('#null-default-batch-apply')?.addEventListener('click', async () => {
+    close();
+    await applyNullDefaultBatchChoices(choices, excludedByField);
+  });
+}
+
+async function applyNullDefaultBatchChoices(choices, excludedByField = {}) {
+  const applyFields = Object.entries(choices)
+    .filter(([, c]) => c.mode === 'apply')
+    .map(([f]) => f);
+  if (applyFields.length === 0) {
+    showBriefToast('No fields selected to apply');
+    return;
+  }
+
+  await ensureAllSpecimensCached();
+
+  // Build per-specimen work list: only fields where the AI value is empty AND the specimen is not excluded
+  const work = [];
+  for (const spec of APP.specimens) {
+    const fj = tableDataCache[spec.filename]?.formatted_json || {};
+    const fieldsForThisSpec = applyFields.filter(f => {
+      const ai = fj[f];
+      if (ai !== undefined && String(ai) !== '') return false;
+      const excluded = excludedByField[f];
+      if (excluded instanceof Set && excluded.has(spec.filename)) return false;
+      return true;
+    });
+    if (fieldsForThisSpec.length > 0) {
+      work.push({ filename: spec.filename, fields: fieldsForThisSpec });
+    }
+  }
+  if (work.length === 0) {
+    showBriefToast('No empty AI fields to fill');
+    return;
+  }
+
+  const affectedFilenames = work.map(w => w.filename);
+  const _rwBefore = rewindCapture(affectedFilenames, applyFields);
+
+  for (const { filename, fields } of work) {
+    if (!APP.state.specimens[filename]) initSpecimenState(filename);
+    const st = APP.state.specimens[filename];
+    for (const field of fields) {
+      stageFieldAsUnconfirmed(st, field, choices[field].value);
+    }
+    st.last_touched = new Date().toISOString();
+    markSpecimenDirty(filename);
+  }
+
+  rewindRecord(
+    'batchNullDefaults',
+    'Batch-Apply Null Defaults',
+    `staged ${applyFields.length} field${applyFields.length !== 1 ? 's' : ''} across ${work.length} specimen${work.length !== 1 ? 's' : ''}`,
+    _rwBefore
+  );
+
+  scheduleSaveState(affectedFilenames);
+  renderFocusSidebar(getFocusCategories());
+  renderFocusMain();
+  showBriefToast(`Staged null defaults on ${work.length} specimen${work.length !== 1 ? 's' : ''}`);
 }
 
 function renderStandardizeSection() {
@@ -11059,6 +11504,7 @@ function renderFocusMain() {
       <div class="focus-row focus-tool-row focus-tool-row-compact" id="focus-row-vouchervision" data-tool-cats="vouchervision">
       ${section('voucherVision', 'VoucherVision Tools', '', `
         <div id="focus-vouchervision-list"></div>
+        <div id="focus-null-default-batch-list"></div>
       `)}
       </div>
 
@@ -11246,6 +11692,7 @@ function renderFocusMain() {
   renderDateViolationsLauncherSection(fieldValues);
   renderStandardizeSection();
   renderVoucherVisionBatchSection();
+  renderNullDefaultBatchSection();
   renderNameParserSection();
   renderAttributionToolSection();
   renderAuthorshipSection();
