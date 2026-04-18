@@ -1961,6 +1961,7 @@ function renderCategoryForm() {
           </div>
           <div class="field-reviewed">
             <div class="field-input ${isResolved && !hasUnconfirmed ? 'resolved' : ''} ${hasUnconfirmed ? 'unconfirmed-input' : ''}" contenteditable="true" data-field="${field}">${escapeHtml(reviewedValue)}</div>
+            ${(APP.currentPrompt?.field_default_values?.[field]?.length) ? (() => { const vals = APP.currentPrompt.field_default_values[field]; const n = vals.length; const icons = Array.from({ length: n }, (_, i) => `<span class="null-default-icon" data-idx="${i}" aria-hidden="true"></span>`).join(''); return `<button class="btn-icon null-default-btn" data-field="${field}" data-count="${n}" title="Insert null value for ${field}. Same as ${_searchModifierKey}+N">${icons}</button>`; })() : ''}
           </div>
         </div>
       `;
@@ -2037,6 +2038,16 @@ function renderCategoryForm() {
         ? inputEl.textContent.replace(/\n/g, ' ').trim()
         : specState.unconfirmed_fields?.[field] || '';
       confirmPendingField(field, latestValue);
+    });
+  });
+
+  el.querySelectorAll('.null-default-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const field = btn.dataset.field;
+      // Focus the adjacent field-input so handleNullCycleHotkey detects it
+      const inputEl = btn.parentElement?.querySelector(`.field-input[data-field="${field}"]`);
+      if (inputEl) inputEl.focus();
+      handleNullCycleHotkey();
     });
   });
 
@@ -2574,11 +2585,21 @@ function handleNullCycleHotkey() {
 
   if (APP.currentView === 'review') {
     acceptField(fieldName, newValue, 'edited');
+    updateNullDefaultActiveIcon(fieldName, _nullCycleIndex);
   } else if (APP.currentView === 'table') {
     applyNullDefaultToTableCell(fieldName, newValue);
   } else if (APP.currentView === 'focus') {
     applyNullDefaultToFocusField(fieldName, newValue);
   }
+}
+
+function updateNullDefaultActiveIcon(fieldName, activeIndex) {
+  const btn = document.querySelector(`.null-default-btn[data-field="${fieldName}"]`);
+  if (!btn) return;
+  btn.querySelectorAll('.null-default-icon').forEach(icon => {
+    const idx = parseInt(icon.dataset.idx, 10);
+    icon.classList.toggle('active', idx <= activeIndex);
+  });
 }
 
 function applyNullDefaultToTableCell(fieldName, newValue) {

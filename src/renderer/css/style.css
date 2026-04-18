@@ -193,8 +193,7 @@
   --error-tint-35: rgba(255, 82, 82, 0.35);
 
   /* Success-dim green tint */
-  /* --success-dim-tint-15: rgba(45, 122, 45, 0.15); */
-  --success-dim-tint-15: rgba(129, 21, 145, 0.739);
+  --success-dim-tint-15: rgba(45, 122, 45, 0.15);
 
   /* Black overlays / dimming */
   --dim-18: rgba(0,0,0,0.18);
@@ -1050,8 +1049,141 @@ textarea { resize: vertical; min-height: 60px; }
 
 .field-reviewed {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
+}
+
+.field-reviewed .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.null-default-btn {
+  flex-shrink: 0;
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.null-default-icon {
+  position: absolute;
+  display: block;
+  background-color: var(--text-muted);
+  mask-image: url('../icons/fill-null.svg');
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url('../icons/fill-null.svg');
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  transition: background-color 0.15s;
+  pointer-events: none;
+}
+
+.null-default-icon.active,
+.null-default-btn:hover .null-default-icon {
+  background-color: var(--accent);
+}
+
+/* 1 icon: centered */
+.null-default-btn[data-count="1"] .null-default-icon {
+  width: 18px; height: 18px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* 2 icons: stacked vertically */
+.null-default-btn[data-count="2"] .null-default-icon {
+  width: 12px; height: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.null-default-btn[data-count="2"] .null-default-icon[data-idx="0"] { top: 10%; }
+.null-default-btn[data-count="2"] .null-default-icon[data-idx="1"] { bottom: 10%; }
+
+/* 3 icons: triangle (1 top, 2 bottom) */
+.null-default-btn[data-count="3"] .null-default-icon {
+  width: 10px; height: 10px;
+}
+.null-default-btn[data-count="3"] .null-default-icon[data-idx="0"] {
+  top: 5%; left: 50%; transform: translateX(-50%);
+}
+.null-default-btn[data-count="3"] .null-default-icon[data-idx="1"] {
+  bottom: 8%; left: 8%;
+}
+.null-default-btn[data-count="3"] .null-default-icon[data-idx="2"] {
+  bottom: 8%; right: 8%;
+}
+
+/* 4 icons: diamond */
+.null-default-btn[data-count="4"] .null-default-icon {
+  width: 10px; height: 10px;
+}
+.null-default-btn[data-count="4"] .null-default-icon[data-idx="0"] {
+  top: 2%; left: 50%; transform: translateX(-50%);
+}
+.null-default-btn[data-count="4"] .null-default-icon[data-idx="1"] {
+  top: 50%; right: 2%; transform: translateY(-50%);
+}
+.null-default-btn[data-count="4"] .null-default-icon[data-idx="2"] {
+  bottom: 2%; left: 50%; transform: translateX(-50%);
+}
+.null-default-btn[data-count="4"] .null-default-icon[data-idx="3"] {
+  top: 50%; left: 2%; transform: translateY(-50%);
+}
+
+/* 5 icons: diamond + center */
+.null-default-btn[data-count="5"] .null-default-icon {
+  width: 8px; height: 8px;
+}
+.null-default-btn[data-count="5"] .null-default-icon[data-idx="0"] {
+  top: 5%; left: 50%; transform: translateX(-50%);
+}
+.null-default-btn[data-count="5"] .null-default-icon[data-idx="1"] {
+  top: 50%; right: 5%; transform: translateY(-50%);
+}
+.null-default-btn[data-count="5"] .null-default-icon[data-idx="2"] {
+  bottom: 5%; left: 50%; transform: translateX(-50%);
+}
+.null-default-btn[data-count="5"] .null-default-icon[data-idx="3"] {
+  top: 50%; left: 5%; transform: translateY(-50%);
+}
+.null-default-btn[data-count="5"] .null-default-icon[data-idx="4"] {
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+}
+
+/* 6 icons: 2x3 grid */
+.null-default-btn[data-count="6"] .null-default-icon {
+  width: 8px; height: 8px;
+}
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="0"] { top: 5%; left: 20%; }
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="1"] { top: 5%; right: 20%; }
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="2"] { top: 50%; left: 20%; transform: translateY(-50%); }
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="3"] { top: 50%; right: 20%; transform: translateY(-50%); }
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="4"] { bottom: 5%; left: 20%; }
+.null-default-btn[data-count="6"] .null-default-icon[data-idx="5"] { bottom: 5%; right: 20%; }
+
+.null-default-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.field-reviewed .field-input:has(+ .null-default-btn) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .field-reviewed input, .field-reviewed textarea {
