@@ -425,11 +425,6 @@ function openRewindPopup() {
               </div>
             `).join('')}
           </div>
-          <div class="rewind-slider-container">
-            <input type="range" class="rewind-slider" id="rewind-slider"
-              min="1" max="${REWIND.stack.length}" value="${selectedCount}"
-              orient="vertical">
-          </div>
         </div>
         <div class="rewind-footer">
           <button class="btn-sm" id="rewind-cancel">Cancel</button>
@@ -441,11 +436,6 @@ function openRewindPopup() {
     // Wire events
     overlay.querySelector('#rewind-close').addEventListener('click', close);
     overlay.querySelector('#rewind-cancel').addEventListener('click', close);
-
-    overlay.querySelector('#rewind-slider').addEventListener('input', (e) => {
-      selectedCount = parseInt(e.target.value);
-      render();
-    });
 
     // Click on timeline entries to select
     overlay.querySelectorAll('.rewind-entry[data-index]').forEach(el => {

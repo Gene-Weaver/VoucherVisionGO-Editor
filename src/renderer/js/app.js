@@ -2117,12 +2117,13 @@ function renderCategoryForm() {
   });
 
   el.querySelectorAll('.null-default-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const field = btn.dataset.field;
-      // Focus the adjacent field-input so handleNullCycleHotkey detects it
-      const inputEl = btn.parentElement?.querySelector(`.field-input[data-field="${field}"]`);
-      if (inputEl) inputEl.focus();
-      handleNullCycleHotkey();
+    // Prevent mousedown from stealing focus (which would trigger blur on
+    // the currently-focused input and cascade a re-render). Running the
+    // null-cycle on mousedown lets us mirror Ctrl+N behavior exactly: the
+    // target input stays focused throughout, so repeated presses cycle.
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      handleNullCycleHotkey(btn.dataset.field);
     });
   });
 
@@ -2610,25 +2611,29 @@ function showBriefToast(message, durationMs = 2000) {
   setTimeout(() => { toast.classList.remove('visible'); setTimeout(() => toast.remove(), 200); }, durationMs);
 }
 
-function handleNullCycleHotkey() {
+function handleNullCycleHotkey(explicitFieldName = null) {
   const defaults = APP.currentPrompt?.field_default_values;
   if (!defaults || Object.keys(defaults).length === 0) {
     showBriefToast('Default null values are not provided in the prompt');
     return;
   }
 
-  // Determine active field based on current view
-  let fieldName = null;
+  // Determine active field. If caller passed an explicit field (e.g., the
+  // null-default button click handler), use it — clicks don't reliably update
+  // document.activeElement before the handler runs.
+  let fieldName = explicitFieldName;
 
-  if (APP.currentView === 'review') {
-    const active = document.activeElement;
-    if (active && active.classList.contains('field-input') && active.dataset.field) {
-      fieldName = active.dataset.field;
+  if (!fieldName) {
+    if (APP.currentView === 'review') {
+      const active = document.activeElement;
+      if (active && active.classList.contains('field-input') && active.dataset.field) {
+        fieldName = active.dataset.field;
+      }
+    } else if (APP.currentView === 'table') {
+      fieldName = getCurrentTableCaseField();
+    } else if (APP.currentView === 'focus') {
+      fieldName = focusField;
     }
-  } else if (APP.currentView === 'table') {
-    fieldName = getCurrentTableCaseField();
-  } else if (APP.currentView === 'focus') {
-    fieldName = focusField;
   }
 
   if (!fieldName) return;
@@ -2647,12 +2652,78 @@ function handleNullCycleHotkey() {
   const newValue = values[_nullCycleIndex];
 
   if (APP.currentView === 'review') {
-    acceptField(fieldName, newValue, 'edited');
-  } else if (APP.currentView === 'table') {
-    applyNullDefaultToTableCell(fieldName, newValue);
-  } else if (APP.currentView === 'focus') {
-    applyNullDefaultToFocusField(fieldName, newValue);
+    // In-place replacement on the field-input for this field — mirrors Ctrl+D.
+    // Use document.querySelector rather than activeElement so button clicks
+    // (which may not have updated activeElement yet) also work on first press.
+    const input = document.querySelector(`.field-input[data-field="${fieldName}"]`);
+    if (!input) return;
+    if (document.activeElement !== input) input.focus();
+    input.textContent = newValue;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    placeCursorAtEndOfContenteditable(input);
+    return;
   }
+
+  if (APP.currentView === 'table') {
+    let editInput = document.querySelector('.batch-table .cell-edit-input');
+    if (!editInput) {
+      if (!tableSelectedCell?.isConnected) return;
+      const td = tableSelectedCell;
+      const row = td.closest('tr');
+      if (!row) return;
+      const specimenIndex = parseInt(row.dataset.index, 10);
+      if (isNaN(specimenIndex)) return;
+      const spec = APP.specimens[specimenIndex];
+      if (!spec) return;
+      const cached = tableDataCache[spec.filename];
+      const tableAllFields = Object.keys(cached?.formatted_json || {});
+      startCellEdit(td, specimenIndex, fieldName, tableAllFields);
+      editInput = td.querySelector('.cell-edit-input');
+    }
+    if (editInput) {
+      editInput.textContent = newValue;
+      editInput.dispatchEvent(new Event('input', { bubbles: true }));
+      editInput.focus();
+      placeCursorAtEndOfContenteditable(editInput);
+    }
+    return;
+  }
+
+  if (APP.currentView === 'focus') {
+    // Find the active specimen row (is-primary class matches tableSelectedIndex).
+    // If none is marked primary, fall back to whichever row matches the selected index.
+    let activeRow = document.querySelector('#focus-view .focus-specimen-row.is-primary');
+    if (!activeRow && typeof tableSelectedIndex === 'number' && tableSelectedIndex >= 0) {
+      activeRow = document.querySelector(`#focus-view .focus-specimen-row[data-index="${tableSelectedIndex}"]`);
+    }
+    if (!activeRow) return;
+
+    // If already in an edit textarea (anywhere in focus view), reuse it
+    let editInput = document.querySelector('#focus-view textarea.cell-edit-input');
+    if (!editInput) {
+      const editableCell = activeRow.querySelector(`.focus-editable-cell[data-field="${fieldName}"]`);
+      if (!editableCell) return;
+      const specimenIndex = parseInt(editableCell.dataset.index, 10);
+      if (isNaN(specimenIndex)) return;
+      startFocusCellEdit(editableCell, specimenIndex, fieldName);
+      editInput = editableCell.querySelector('textarea.cell-edit-input');
+    }
+    if (editInput) {
+      editInput.value = newValue;
+      editInput.dispatchEvent(new Event('input', { bubbles: true }));
+      editInput.focus();
+      editInput.setSelectionRange(newValue.length, newValue.length);
+    }
+  }
+}
+
+function placeCursorAtEndOfContenteditable(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 function applyNullDefaultToTableCell(fieldName, newValue) {
@@ -11684,12 +11755,10 @@ function renderFocusMain() {
     if (row) { row.style.height = saved.height; row.style.flex = saved.flex; }
   }
 
-  // Restore scroll positions from before re-render
-  el.querySelectorAll('.focus-section-body, .focus-specimens-list, .focus-facet-list').forEach(scrollable => {
-    const section = scrollable.closest('[data-section]');
-    const key = section ? section.dataset.section : scrollable.className;
-    if (_savedScrollPositions[key]) scrollable.scrollTop = _savedScrollPositions[key];
-  });
+  // Save scroll positions object on el so the deferred restore can reach it.
+  // Final restoration happens after the list/facet renderers populate innerHTML
+  // (see `restoreFocusScrollPositions` below, called after renderFocusSpecimens).
+  el._pendingScrollRestore = _savedScrollPositions;
 
   // Wire section header toggles (only collapsible ones with arrows)
   el.querySelectorAll('.focus-section-header:not(.focus-section-header-fixed)').forEach(header => {
@@ -11833,6 +11902,19 @@ function renderFocusMain() {
   maybeRenderFocusCarousel(fieldValues);
   updateFocusPrimaryState();
   updateFocusConfirmButtons();
+
+  // Restore scroll positions AFTER all list/facet renderers have populated
+  // their innerHTML (which resets scrollTop to 0). Doing this here keeps the
+  // specimens panel in place across edit commits.
+  if (el._pendingScrollRestore) {
+    const restore = el._pendingScrollRestore;
+    el.querySelectorAll('.focus-section-body, .focus-specimens-list, .focus-facet-list').forEach(scrollable => {
+      const section = scrollable.closest('[data-section]');
+      const key = section ? section.dataset.section : scrollable.className;
+      if (restore[key]) scrollable.scrollTop = restore[key];
+    });
+    delete el._pendingScrollRestore;
+  }
 
   // If the selected specimen isn't in the current filtered list, clear the image
   const visibleIndices = new Set(
@@ -13592,10 +13674,7 @@ function updateSettingsUpdateUI(data) {
 // ── Flagged Specimens Popup ─────────────────────────────────
 
 function openFlaggedSpecimensPopup() {
-  // Flagged popup is click-through-safe: we do NOT want the outside-click
-  // dismiss because the popup is a long list with potentially-interactive
-  // rows; preserve legacy behavior (close only via X button).
-  const shell = createPopupShell({ overlayId: 'flagged-overlay', dismissOnOutsideClick: false });
+  const shell = createPopupShell({ overlayId: 'flagged-overlay' });
   if (!shell) return;
   const overlay = shell.overlay;
 
