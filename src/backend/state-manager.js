@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { atomicWrite } = require('./util/file-utils');
+
 const STATE_FILENAME = '_vvgo_editor_state.json';
 
 function getStatePath(folderPath) {
@@ -25,13 +27,8 @@ function loadState(folderPath) {
  * Save state to the working folder with atomic write.
  */
 function saveState(folderPath, state) {
-  const statePath = getStatePath(folderPath);
-  const tmpPath = statePath + '.tmp';
-
   state.last_modified = new Date().toISOString();
-
-  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, statePath);
+  atomicWrite(getStatePath(folderPath), state);
   return true;
 }
 

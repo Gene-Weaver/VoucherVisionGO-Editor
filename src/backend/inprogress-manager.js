@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { atomicWrite } = require('./util/file-utils');
+
 const INPROGRESS_DIR = '_INPROGRESS';
 const INPROGRESS_SUFFIX = '__INPROGRESS';
 
@@ -46,12 +48,10 @@ function readInProgress(folderPath, filename) {
 function writeInProgress(folderPath, filename, data) {
   ensureInProgressDir(folderPath);
   const filePath = getInProgressPath(folderPath, filename);
-  const tmpPath = filePath + '.tmp';
 
   data.last_modified = new Date().toISOString();
 
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  atomicWrite(filePath, data);
   return true;
 }
 

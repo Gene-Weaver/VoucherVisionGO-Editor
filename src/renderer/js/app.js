@@ -112,6 +112,78 @@ function showView(viewName) {
   const el = document.getElementById(`${viewMap[viewName] || viewName}-view`);
   if (el) el.classList.add('active');
   updateNavBar();
+  requestAnimationFrame(() => {
+    if (el && el.classList.contains('active')) refreshSlideSwitchLayout(el);
+  });
+}
+
+const PRELOADED_VIEW_STATE = {
+  table: { ready: false, stale: true, folderPath: null, selectedIndex: 0 },
+  focus: { ready: false, stale: true, folderPath: null, selectedIndex: -1 },
+};
+let _isPreloadingViews = false;
+
+function resetPreloadedViewState() {
+  Object.keys(PRELOADED_VIEW_STATE).forEach((viewName) => {
+    PRELOADED_VIEW_STATE[viewName] = {
+      ready: false,
+      stale: true,
+      folderPath: null,
+      selectedIndex: viewName === 'table' ? 0 : -1,
+    };
+  });
+}
+
+function invalidatePreloadedViews() {
+  Object.values(PRELOADED_VIEW_STATE).forEach((state) => {
+    state.stale = true;
+  });
+}
+
+function markPreloadedViewReady(viewName, selectedIndex = tableSelectedIndex) {
+  const state = PRELOADED_VIEW_STATE[viewName];
+  if (!state) return;
+  state.ready = true;
+  state.stale = false;
+  state.folderPath = APP.folderPath;
+  state.selectedIndex = selectedIndex;
+}
+
+function consumePreloadedView(viewName) {
+  const state = PRELOADED_VIEW_STATE[viewName];
+  if (!state) return;
+  state.ready = false;
+  state.stale = true;
+}
+
+function canReusePreloadedView(viewName) {
+  const state = PRELOADED_VIEW_STATE[viewName];
+  return !!state && state.ready && !state.stale && state.folderPath === APP.folderPath;
+}
+
+async function openAppView(viewName) {
+  if (viewName === 'review') {
+    showView('review');
+    renderReviewView();
+    return;
+  }
+
+  if (canReusePreloadedView(viewName)) {
+    tableSelectedIndex = PRELOADED_VIEW_STATE[viewName].selectedIndex;
+    consumePreloadedView(viewName);
+    showView(viewName);
+    syncMountedImagePreferenceUi({ refreshVisibleImage: false });
+    return;
+  }
+
+  showView(viewName);
+  if (viewName === 'table') {
+    await renderTableView();
+    return;
+  }
+  if (viewName === 'focus') {
+    await renderFocusView();
+  }
 }
 
 // ── Nav Bar ─────────────────────────────────────────────────
@@ -341,9 +413,11 @@ async function openFolderDialog() {
 // dismiss by overlay click / Esc). Used as a typo guard on project open.
 function confirmNewUsernameAssignment(name) {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'image-modal-overlay';
-    overlay.style.cursor = 'default';
+    const shell = createPopupShell({
+      dismissOnOutsideClick: false,
+      onEscape: false,
+    });
+    const overlay = shell.overlay;
     overlay.innerHTML = `
       <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:22px 24px;max-width:440px;width:min(440px,calc(100vw - 32px));cursor:default" onclick="event.stopPropagation()">
         <div style="font-size:var(--fs-14);font-weight:600;margin-bottom:10px;color:var(--text-primary)">Assign new username?</div>
@@ -360,16 +434,17 @@ function confirmNewUsernameAssignment(name) {
     const finish = (accepted) => {
       if (settled) return;
       settled = true;
-      overlay.removeEventListener('keydown', onKey, true);
-      overlay.remove();
+      shell.close();
+      document.removeEventListener('keydown', onKey, true);
       resolve(accepted);
     };
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); finish(false); }
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
     };
-    overlay.addEventListener('click', () => finish(false));
-    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finish(false);
+    });
     overlay.querySelector('#new-username-back')?.addEventListener('click', (e) => {
       e.stopPropagation();
       finish(false);
@@ -388,6 +463,7 @@ function confirmNewUsernameAssignment(name) {
 
 async function loadFolder(folderPath) {
   showNavSpinner();
+  resetPreloadedViewState();
 
   // ── Build a temporary nextSession — APP is NOT mutated until commit point ──
   const next = {};
@@ -491,6 +567,8 @@ async function loadFolder(folderPath) {
         folder_path: folderPath,
         last_modified: new Date().toISOString(),
         current_specimen: next.specimens[0].filename,
+        image_type: 'collage',
+        image_zoom_mode: 'fit',
         checklist_checked: [],
         prompt_name: validatedPromptName,
         prompt_field_schema: fieldSchema,
@@ -500,6 +578,8 @@ async function loadFolder(folderPath) {
     } else {
       next.project.prompt_name = validatedPromptName;
       next.project.prompt_field_schema = fieldSchema;
+      next.project.image_type = normalizeImageType(next.project.image_type);
+      next.project.image_zoom_mode = normalizeImageZoomMode(next.project.image_zoom_mode);
 
       // Username typo guard. We derive the set of previously-seen usernames
       // from the progress tracker's sessions (each session already stores a
@@ -606,6 +686,7 @@ async function loadFolder(folderPath) {
     APP.sessionId = null;
     APP.state = next.state;
     APP.currentIndex = next.currentIndex;
+    applyProjectImagePreferences(APP.project);
     startProgressTrackingSession(APP.project);
 
     // Apply UI settings
@@ -632,6 +713,14 @@ async function loadFolder(folderPath) {
 
     showView('review');
     await loadSpecimen(APP.currentIndex);
+    _isPreloadingViews = true;
+    try {
+      await renderTableView();
+      await renderFocusView();
+    } finally {
+      _isPreloadingViews = false;
+    }
+    showView('review');
     window.api.warmImageCache(folderPath, APP.specimens.map(s => s.filename)).catch(err => {
       console.warn('Failed to start image cache warming:', err);
     });
@@ -692,6 +781,7 @@ async function migrateFromLegacy(folderPath) {
 async function loadSpecimen(index) {
   if (index < 0 || index >= APP.specimens.length) return;
   showNavSpinner();
+  invalidatePreloadedViews();
   APP.currentIndex = index;
 
   const spec = APP.specimens[index];
@@ -916,9 +1006,8 @@ function formatTrackerDuration(ms) {
 
 function openProgressTrackerPopup() {
   const summary = getProgressTrackerSummary();
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
 
   const reviewerHtml = summary.reviewers.length > 0
     ? summary.reviewers.map(reviewer => `
@@ -994,9 +1083,7 @@ function openProgressTrackerPopup() {
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const close = shell.close;
   overlay.querySelector('#progress-tracker-close')?.addEventListener('click', close);
   overlay.querySelector('#progress-tracker-done')?.addEventListener('click', close);
 }
@@ -1144,9 +1231,7 @@ function renderInlineViewToggle() {
     { value: 'table', label: 'Table' },
     { value: 'focus', label: 'Focus' }
   ], APP.currentView, (val) => {
-    if (val === 'review') { showView('review'); renderReviewView(); }
-    else if (val === 'table') { showView('table'); renderTableView(); }
-    else { showView('focus'); renderFocusView(); }
+    openAppView(val);
   });
   el.innerHTML = sw.html;
   sw.setup();
@@ -1188,7 +1273,7 @@ async function renderLeftPanel() {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], APP.imageType, (val) => {
-    APP.imageType = val;
+    setGlobalImageType(val);
     loadImage();
   });
   document.getElementById('image-type-switch-container').innerHTML = imgSw.html;
@@ -1198,7 +1283,7 @@ async function renderLeftPanel() {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], APP.imageZoomMode, (val) => {
-    APP.imageZoomMode = val;
+    setGlobalImageZoomMode(val);
     applyImageZoomMode('image-container', val);
   });
   document.getElementById('image-zoom-switch-container').innerHTML = zoomSw.html;
@@ -1252,17 +1337,23 @@ async function loadImage() {
   const spec = APP.specimens[APP.currentIndex];
   const dataUrl = await window.api.getImage(APP.folderPath, spec.filename, APP.imageType, 'full');
 
-  if (dataUrl) {
-    container.innerHTML = `<img src="${dataUrl}" alt="Specimen image" id="specimen-image">`;
-    document.getElementById('specimen-image').addEventListener('click', () => openImageModal(dataUrl));
-    applyImageZoomMode('image-container', APP.imageZoomMode);
-  } else {
-    container.innerHTML = `<div class="image-placeholder">${APP.imageType === 'original' ? 'Original image not available yet' : 'No image available'}</div>`;
-  }
+  await swapPreviewImage(container, dataUrl, {
+    altText: 'Specimen image',
+    onClick: () => openSpecimenImagePopup({
+      filename: spec.filename,
+      initialImageType: APP.imageType,
+      initialZoomMode: APP.imageZoomMode,
+    }),
+    emptyHtml: `<div class="image-placeholder">${APP.imageType === 'original' ? 'Original image not available yet' : 'No image available'}</div>`,
+  });
+  // Preserve id="specimen-image" for any CSS/JS hooks
+  const img = container.querySelector('img');
+  if (img) img.id = 'specimen-image';
+  applyImageZoomMode('image-container', APP.imageZoomMode);
 }
 
-function applyImageZoomMode(containerId, mode) {
-  const container = document.getElementById(containerId);
+function applyImageZoomMode(target, mode) {
+  const container = typeof target === 'string' ? document.getElementById(target) : target;
   if (!container) return;
   if (mode === 'zoom') {
     container.classList.add('image-zoom-mode');
@@ -1273,133 +1364,115 @@ function applyImageZoomMode(containerId, mode) {
   }
 }
 
-function openImageModal(dataUrl) {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
+function openSpecimenImagePopup({
+  filename,
+  title = '',
+  fieldLabel = '',
+  fieldValue = '',
+  initialImageType = getGlobalImageType(),
+  initialZoomMode = getGlobalImageZoomMode(),
+} = {}) {
+  if (!filename) return null;
+
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
+  const popupToken = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const imageId = `specimen-image-popup-image-${popupToken}`;
+  const typeToggleId = `specimen-image-popup-type-${popupToken}`;
+  const zoomToggleId = `specimen-image-popup-zoom-${popupToken}`;
+  const hasMeta = (fieldLabel || '') !== '' || (fieldValue !== '' && fieldValue !== null && fieldValue !== undefined);
+  const displayValue = fieldValue === ''
+    ? '<span class="cell-empty-placeholder">(empty)</span>'
+    : escapeHtml(String(fieldValue ?? ''));
+
   overlay.innerHTML = `
-    <div class="image-modal-viewport" onclick="event.stopPropagation()">
-      <button class="btn-sm btn-icon popup-close-btn popup-close-btn-floating image-modal-close-btn" id="image-modal-close" title="Close"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg></button>
-      <div class="image-modal-canvas">
-        <img src="${dataUrl}" alt="Specimen image zoomed">
+    <div class="cluster-gallery-popup focus-image-reference-popup" onclick="event.stopPropagation()">
+      <div class="name-parser-header focus-image-reference-header">
+        <div class="focus-image-reference-header-center">
+          <div id="${zoomToggleId}"></div>
+          <div class="focus-image-reference-header-title" title="${escapeAttr(title || getDisplayFilename(filename))}">
+            ${escapeHtml(title || getDisplayFilename(filename))}
+          </div>
+          <div id="${typeToggleId}"></div>
+        </div>
+        <div class="focus-image-reference-header-close">
+          ${popupCloseBtnHtml('specimen-image-popup-close')}
+        </div>
+      </div>
+      ${hasMeta ? `
+        <div class="focus-image-reference-meta">
+          <div class="focus-image-reference-field">${escapeHtml(fieldLabel || '')}</div>
+          <div class="focus-image-reference-value">${displayValue}</div>
+        </div>
+      ` : ''}
+      <div class="wfo-reference-images image-fit-mode" id="${imageId}">
+        <div class="table-image-placeholder">Loading...</div>
       </div>
     </div>
   `;
 
-  const viewport = overlay.querySelector('.image-modal-viewport');
-  const canvas = overlay.querySelector('.image-modal-canvas');
-  const img = overlay.querySelector('img');
-
-  // Scale=1 means "fit to viewport". Max = 3x native resolution.
-  let scale = 1, minScale = 1, maxScale = 1;
-  let tx = 0, ty = 0;
-
-  function computeBounds() {
-    const vw = canvas.clientWidth;
-    const vh = canvas.clientHeight;
-    const iw = img.naturalWidth * scale;
-    const ih = img.naturalHeight * scale;
-    // If image is smaller than viewport at this scale, center it
-    if (iw <= vw) tx = 0;
-    else tx = Math.min(0, Math.max(vw - iw, tx));
-    if (ih <= vh) ty = 0;
-    else ty = Math.min(0, Math.max(vh - ih, ty));
-  }
-
-  function applyTransform() {
-    const vw = canvas.clientWidth;
-    const vh = canvas.clientHeight;
-    const iw = img.naturalWidth * scale;
-    const ih = img.naturalHeight * scale;
-    const ox = iw < vw ? (vw - iw) / 2 : tx;
-    const oy = ih < vh ? (vh - ih) / 2 : ty;
-    img.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
-  }
-
-  img.addEventListener('load', () => {
-    const vw = canvas.clientWidth;
-    const vh = canvas.clientHeight;
-    const fitScale = Math.min(vw / img.naturalWidth, vh / img.naturalHeight, 1);
-    minScale = fitScale;
-    maxScale = 3; // 3x native resolution
-    scale = fitScale;
-    tx = 0; ty = 0;
-    applyTransform();
-  });
-
-  // Scroll-wheel zoom toward cursor
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
-    const prevScale = scale;
-    const factor = e.deltaY > 0 ? 0.92 : 1.08;
-    scale = Math.min(Math.max(scale * factor, minScale), maxScale);
-    if (scale === prevScale) return;
-
-    // Compute current image offset (centering when small)
-    const vw = canvas.clientWidth;
-    const vh = canvas.clientHeight;
-    const prevIW = img.naturalWidth * prevScale;
-    const prevIH = img.naturalHeight * prevScale;
-    const prevOX = prevIW < vw ? (vw - prevIW) / 2 : tx;
-    const prevOY = prevIH < vh ? (vh - prevIH) / 2 : ty;
-
-    // Zoom toward cursor
-    const ratio = scale / prevScale;
-    tx = mx - ratio * (mx - prevOX);
-    ty = my - ratio * (my - prevOY);
-    computeBounds();
-    applyTransform();
-
-    // Update cursor
-    canvas.style.cursor = scale > minScale + 0.001 ? 'grab' : 'default';
-  }, { passive: false });
-
-  // Drag to pan
-  let dragging = false, startX, startY;
-  const onMouseMove = (e) => {
-    if (!dragging) return;
-    tx = e.clientX - startX;
-    ty = e.clientY - startY;
-    computeBounds();
-    applyTransform();
-  };
-  const onMouseUp = () => {
-    dragging = false;
-    canvas.style.cursor = scale > minScale + 0.001 ? 'grab' : 'default';
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-  };
-  canvas.addEventListener('mousedown', (e) => {
-    if (scale <= minScale + 0.001) return; // no pan when fully fitted
-    dragging = true;
-    // Use current visual offset as drag start
-    const vw = canvas.clientWidth;
-    const vh = canvas.clientHeight;
-    const iw = img.naturalWidth * scale;
-    const ih = img.naturalHeight * scale;
-    startX = e.clientX - (iw < vw ? tx : tx);
-    startY = e.clientY - (ih < vh ? ty : ty);
-    canvas.style.cursor = 'grabbing';
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    e.preventDefault();
-  });
-
-  // Close handlers
-  const close = () => {
-    window.removeEventListener('mousemove', onMouseMove);
-    window.removeEventListener('mouseup', onMouseUp);
-    overlay.remove();
-  };
-  overlay.addEventListener('click', close);
-  overlay.querySelector('#image-modal-close').addEventListener('click', (e) => {
+  let imageType = initialImageType;
+  let zoomMode = initialZoomMode;
+  const close = shell.close;
+  overlay.querySelector('#specimen-image-popup-close').addEventListener('click', (e) => {
     e.stopPropagation();
     close();
   });
-  document.body.appendChild(overlay);
+
+  const loadImage = async () => {
+    const imageEl = overlay.querySelector(`#${imageId}`);
+    if (!imageEl) return;
+    const dataUrl = await window.api.getImage(APP.folderPath, filename, imageType, 'full');
+    await swapPreviewImage(imageEl, dataUrl, {
+      altText: getDisplayFilename(filename),
+      emptyHtml: `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`,
+    });
+    applyImageZoomMode(imageEl, zoomMode);
+  };
+
+  const typeSwitch = createSlideSwitch(typeToggleId, [
+    { value: 'collage', label: 'Collage' },
+    { value: 'original', label: 'Original' },
+  ], imageType, (val) => {
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
+    syncMountedImagePreferenceUi();
+    loadImage();
+  });
+  const typeContainer = overlay.querySelector(`#${typeToggleId}`);
+  if (typeContainer) {
+    typeContainer.innerHTML = typeSwitch.html;
+    typeSwitch.setup();
+  }
+
+  const zoomSwitch = createSlideSwitch(zoomToggleId, [
+    { value: 'fit', label: 'Fit' },
+    { value: 'zoom', label: 'Zoom' },
+  ], zoomMode, (val) => {
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
+    syncMountedImagePreferenceUi({ refreshVisibleImage: false });
+    applyImageZoomMode(overlay.querySelector(`#${imageId}`), zoomMode);
+  });
+  const zoomContainer = overlay.querySelector(`#${zoomToggleId}`);
+  if (zoomContainer) {
+    zoomContainer.innerHTML = zoomSwitch.html;
+    zoomSwitch.setup();
+  }
+
+  loadImage();
+  return { overlay, close };
+}
+
+function showSpecimenImageReferencePopup(filename, title = '', fieldLabel = '', fieldValue = '') {
+  return openSpecimenImagePopup({
+    filename,
+    title,
+    fieldLabel,
+    fieldValue,
+    initialImageType: tableImageType,
+    initialZoomMode: tableImageZoomMode,
+  });
 }
 
 // ── Map ─────────────────────────────────────────────────────
@@ -1993,25 +2066,27 @@ function renderCategoryForm() {
       const specState = APP.state.specimens[spec.filename];
       if (!specState) return;
 
-      const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
+      withRewind({
+        action: 'markUncertain', label: 'Mark Uncertain',
+        summary: `"${field}" on ${getDisplayFilename(spec.filename)}`,
+        filenames: [spec.filename], fields: [field], opts: { categories_confirmed: true },
+      }, () => {
+        // Get current value: from accepted, or from the contenteditable input, or from original JSON
+        const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
+        const currentValue = specState.accepted_fields?.[field]?.value
+          ?? (inputEl ? inputEl.textContent.replace(/\n/g, ' ').trim() : null)
+          ?? (APP.currentSpecimen.formatted_json?.[field] !== undefined ? String(APP.currentSpecimen.formatted_json[field]) : '');
 
-      // Get current value: from accepted, or from the contenteditable input, or from original JSON
-      const inputEl = el.querySelector(`.field-input[data-field="${field}"]`);
-      const currentValue = specState.accepted_fields?.[field]?.value
-        ?? (inputEl ? inputEl.textContent.replace(/\n/g, ' ').trim() : null)
-        ?? (APP.currentSpecimen.formatted_json?.[field] !== undefined ? String(APP.currentSpecimen.formatted_json[field]) : '');
+        // Move to unconfirmed (keep the value, just change the state)
+        if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
+        specState.unconfirmed_fields[field] = currentValue;
 
-      // Move to unconfirmed (keep the value, just change the state)
-      if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
-      specState.unconfirmed_fields[field] = currentValue;
+        // Remove from accepted if it was there
+        if (specState.accepted_fields[field]) delete specState.accepted_fields[field];
 
-      // Remove from accepted if it was there
-      if (specState.accepted_fields[field]) delete specState.accepted_fields[field];
-
-      // Un-confirm categories
-      autoConfirmCategories(spec.filename);
-
-      rewindRecord('markUncertain', 'Mark Uncertain', `"${field}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+        // Un-confirm categories
+        autoConfirmCategories(spec.filename);
+      });
 
       scheduleSaveState(spec.filename);
       scheduleAutoSaveReviewed(spec.filename);
@@ -2334,16 +2409,7 @@ function cycleModeView() {
   const currentIndex = modeOrder.indexOf(APP.currentView);
   if (currentIndex === -1) return;
   const nextView = modeOrder[(currentIndex + 1) % modeOrder.length];
-  if (nextView === 'review') {
-    showView('review');
-    renderReviewView();
-  } else if (nextView === 'table') {
-    showView('table');
-    renderTableView();
-  } else {
-    showView('focus');
-    renderFocusView();
-  }
+  openAppView(nextView);
 }
 
 function renderWebSearchModule(mode) {
@@ -2361,9 +2427,8 @@ function renderWebSearchModule(mode) {
 function openWebSearchPopup(query) {
   if (!query || !query.trim()) return;
   const q = query.trim();
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
   const bodyHtml = isDemoMode()
     ? `
       <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--text-secondary);font-size:var(--fs-14);line-height:1.5">
@@ -2381,9 +2446,7 @@ function openWebSearchPopup(query) {
       ${bodyHtml}
     </div>
   `;
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const close = shell.close;
   overlay.querySelector('#web-search-close').addEventListener('click', close);
 }
 
@@ -2614,19 +2677,23 @@ function applyNullDefaultToTableCell(fieldName, newValue) {
 
   if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
   const specState = APP.state.specimens[spec.filename];
-  const _rwBefore = rewindCapture([spec.filename], [fieldName], { categories_confirmed: true });
 
-  specState.accepted_fields[fieldName] = { value: newValue, source: 'edited' };
-  if (specState.unconfirmed_fields) delete specState.unconfirmed_fields[fieldName];
-  specState.last_touched = new Date().toISOString();
+  withRewind({
+    action: 'cellEdit', label: 'Null Default',
+    summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: [fieldName], opts: { categories_confirmed: true },
+  }, () => {
+    specState.accepted_fields[fieldName] = { value: newValue, source: 'edited' };
+    if (specState.unconfirmed_fields) delete specState.unconfirmed_fields[fieldName];
+    specState.last_touched = new Date().toISOString();
 
-  td.textContent = newValue;
-  td.classList.remove('cell-unaccepted');
-  td.classList.add('cell-accepted');
-  td.title = newValue;
+    td.textContent = newValue;
+    td.classList.remove('cell-unaccepted');
+    td.classList.add('cell-accepted');
+    td.title = newValue;
 
-  autoConfirmCategories(spec.filename);
-  rewindRecord('cellEdit', 'Null Default', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    autoConfirmCategories(spec.filename);
+  });
   scheduleSaveState(spec.filename);
   scheduleAutoSaveReviewed(spec.filename);
   scheduleTableRerender();
@@ -2651,13 +2718,16 @@ function applyNullDefaultToFocusField(fieldName, newValue) {
 
   if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
   const specState = APP.state.specimens[spec.filename];
-  const _rwBefore = rewindCapture([spec.filename], [fieldName]);
 
-  if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
-  specState.unconfirmed_fields[fieldName] = newValue;
-  specState.last_touched = new Date().toISOString();
-
-  rewindRecord('focusCellEdit', 'Null Default', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+  withRewind({
+    action: 'focusCellEdit', label: 'Null Default',
+    summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: [fieldName],
+  }, () => {
+    if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
+    specState.unconfirmed_fields[fieldName] = newValue;
+    specState.last_touched = new Date().toISOString();
+  });
   scheduleSaveState(spec.filename);
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
@@ -2669,7 +2739,7 @@ function applyNullDefaultToFocusField(fieldName, newValue) {
 function captureCaseSelectionForCurrentContext() {
   // Cluster popup takes precedence when its overlay is open
   if (document.querySelector('.focus-cluster-popup')) {
-    const ctx = captureClusterPopupCaseSelection();
+    const ctx = captureCaseSelectionContext('cluster-popup');
     if (ctx && ctx.selectedText) return ctx;
   }
   if (APP.currentView === 'review') return captureCaseSelectionContext('form');
@@ -2756,58 +2826,77 @@ function captureInputCaseSelection(selector, metaExtractor) {
   };
 }
 
-function captureFormCaseSelection() {
-  const spec = APP.specimens[APP.currentIndex];
-  if (!spec) return null;
-  return captureContenteditableCaseSelection('.field-input', (input) => {
-    const field = input.dataset.field;
-    return field ? { filename: spec.filename, field, view: 'form' } : null;
-  });
-}
-
-function captureTableCaseSelection() {
-  return captureContenteditableCaseSelection('.batch-table .cell-edit-input', (input) => {
-    const td = input.closest('td[data-field][data-index]');
-    if (!td) return null;
-    const index = parseInt(td.dataset.index, 10);
-    const field = td.dataset.field;
-    const spec = APP.specimens[index];
-    if (Number.isNaN(index) || !field || !spec) return null;
-    return { filename: spec.filename, field, index, view: 'table' };
-  });
-}
-
-function captureFocusCaseSelection() {
-  const textareaContext = captureTextareaCaseSelection('#focus-view textarea.cell-edit-input', (input) => {
-    const index = parseInt(input.dataset.index, 10);
-    const field = input.dataset.field;
-    const spec = APP.specimens[index];
-    if (Number.isNaN(index) || !field || !spec) return null;
-    return { filename: spec.filename, field, index, view: 'focus' };
-  });
-  if (textareaContext) return textareaContext;
-
-  return captureContenteditableCaseSelection('#ocr-compare-editable', (editable) => {
-    const index = parseInt(editable.dataset.index, 10);
-    const field = editable.dataset.field;
-    const spec = APP.specimens[index];
-    if (Number.isNaN(index) || !field || !spec) return null;
-    return { filename: spec.filename, field, index, view: 'focus' };
-  });
-}
-
-function captureClusterPopupCaseSelection() {
-  return captureInputCaseSelection('.focus-cluster-popup .focus-cluster-merge-input', (input) => {
-    const field = document.querySelector('#cluster-review-field')?.value || '';
-    return field ? { field, view: 'cluster-popup' } : null;
-  });
-}
+// ── Case-selection capture registry ─────────────────────────
+// Each mode is a list of probes. Probes are tried in order; first non-null wins.
+// kind: 'contenteditable' | 'textarea' | 'input' — routes to the matching primitive helper.
+const CASE_CAPTURE_MODES = {
+  form: [
+    {
+      kind: 'contenteditable', selector: '.field-input',
+      meta: (input) => {
+        const spec = APP.specimens[APP.currentIndex];
+        const field = input.dataset.field;
+        return (spec && field) ? { filename: spec.filename, field, view: 'form' } : null;
+      },
+    },
+  ],
+  table: [
+    {
+      kind: 'contenteditable', selector: '.batch-table .cell-edit-input',
+      meta: (input) => {
+        const td = input.closest('td[data-field][data-index]');
+        if (!td) return null;
+        const index = parseInt(td.dataset.index, 10);
+        const field = td.dataset.field;
+        const spec = APP.specimens[index];
+        if (Number.isNaN(index) || !field || !spec) return null;
+        return { filename: spec.filename, field, index, view: 'table' };
+      },
+    },
+  ],
+  focus: [
+    {
+      kind: 'textarea', selector: '#focus-view textarea.cell-edit-input',
+      meta: (input) => {
+        const index = parseInt(input.dataset.index, 10);
+        const field = input.dataset.field;
+        const spec = APP.specimens[index];
+        if (Number.isNaN(index) || !field || !spec) return null;
+        return { filename: spec.filename, field, index, view: 'focus' };
+      },
+    },
+    {
+      kind: 'contenteditable', selector: '#ocr-compare-editable',
+      meta: (editable) => {
+        const index = parseInt(editable.dataset.index, 10);
+        const field = editable.dataset.field;
+        const spec = APP.specimens[index];
+        if (Number.isNaN(index) || !field || !spec) return null;
+        return { filename: spec.filename, field, index, view: 'focus' };
+      },
+    },
+  ],
+  'cluster-popup': [
+    {
+      kind: 'input', selector: '.focus-cluster-popup .focus-cluster-merge-input',
+      meta: () => {
+        const field = document.querySelector('#cluster-review-field')?.value || '';
+        return field ? { field, view: 'cluster-popup' } : null;
+      },
+    },
+  ],
+};
 
 function captureCaseSelectionContext(mode) {
-  if (mode === 'form') return captureFormCaseSelection();
-  if (mode === 'table') return captureTableCaseSelection();
-  if (mode === 'focus') return captureFocusCaseSelection();
-  if (mode === 'cluster-popup') return captureClusterPopupCaseSelection();
+  const probes = CASE_CAPTURE_MODES[mode];
+  if (!probes) return null;
+  for (const probe of probes) {
+    let ctx = null;
+    if (probe.kind === 'contenteditable') ctx = captureContenteditableCaseSelection(probe.selector, probe.meta);
+    else if (probe.kind === 'textarea') ctx = captureTextareaCaseSelection(probe.selector, probe.meta);
+    else if (probe.kind === 'input') ctx = captureInputCaseSelection(probe.selector, probe.meta);
+    if (ctx) return ctx;
+  }
   return null;
 }
 
@@ -2920,23 +3009,27 @@ function confirmPendingField(field, latestValue, updateInput = true) {
   const specState = APP.state.specimens[spec.filename];
   if (!specState) return;
 
-  const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
-  if (specState.unconfirmed_fields) delete specState.unconfirmed_fields[field];
+  withRewind({
+    action: 'confirmUnconfirmed', label: 'Confirm Field',
+    summary: `"${field}" = "${latestValue}" on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    if (specState.unconfirmed_fields) delete specState.unconfirmed_fields[field];
 
-  const aiValue = APP.currentSpecimen.formatted_json?.[field];
-  const source = deriveAcceptedSource(aiValue, latestValue);
+    const aiValue = APP.currentSpecimen.formatted_json?.[field];
+    const source = deriveAcceptedSource(aiValue, latestValue);
 
-  specState.accepted_fields[field] = { value: latestValue, source };
-  specState.last_touched = new Date().toISOString();
+    specState.accepted_fields[field] = { value: latestValue, source };
+    specState.last_touched = new Date().toISOString();
 
-  const input = document.querySelector(`.field-input[data-field="${field}"]`);
-  if (input && updateInput) input.textContent = latestValue;
+    const input = document.querySelector(`.field-input[data-field="${field}"]`);
+    if (input && updateInput) input.textContent = latestValue;
 
-  autoConfirmCategories(spec.filename);
-  rewindRecord('confirmUnconfirmed', 'Confirm Field', `"${field}" = "${latestValue}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    autoConfirmCategories(spec.filename);
+  });
 
   updateSpecimenCompletionStatus(spec.filename);
-  scheduleInProgressSave(spec.filename);
+  scheduleSaveState(spec.filename);
   scheduleReviewFormRerender();
 }
 
@@ -2945,40 +3038,43 @@ function acceptField(field, value, source, updateInput = true) {
   const specState = APP.state.specimens[spec.filename];
   if (!specState) return;
 
-  const _rwBefore = rewindCapture([spec.filename], [field], { categories_confirmed: true });
-  specState.accepted_fields[field] = { value, source };
-  specState.last_touched = new Date().toISOString();
+  withRewind({
+    action: 'acceptField', label: 'Accept Field',
+    summary: `"${field}" = "${value}" (${source}) on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    specState.accepted_fields[field] = { value, source };
+    specState.last_touched = new Date().toISOString();
 
-  // Update input
-  const input = document.querySelector(`.field-input[data-field="${field}"]`);
-  if (input) {
-    if (updateInput) {
-      input.textContent = value;
+    // Update input
+    const input = document.querySelector(`.field-input[data-field="${field}"]`);
+    if (input) {
+      if (updateInput) {
+        input.textContent = value;
+      }
+      input.classList.add('resolved');
     }
-    input.classList.add('resolved');
-  }
 
-  // Update status label and field label color
-  const row = document.querySelector(`.field-row[data-field="${field}"]`);
-  if (row) {
-    row.classList.add('resolved');
-    row.dataset.source = source;
-    row.dataset.status = getStatusLabel(source);
-    const statusEl = row.querySelector('.field-status');
-    if (statusEl) {
-      statusEl.className = `field-status ${source}`;
-      statusEl.textContent = getStatusLabel(source);
+    // Update status label and field label color
+    const row = document.querySelector(`.field-row[data-field="${field}"]`);
+    if (row) {
+      row.classList.add('resolved');
+      row.dataset.source = source;
+      row.dataset.status = getStatusLabel(source);
+      const statusEl = row.querySelector('.field-status');
+      if (statusEl) {
+        statusEl.className = `field-status ${source}`;
+        statusEl.textContent = getStatusLabel(source);
+      }
+      const labelEl = row.querySelector('.field-label');
+      if (labelEl) {
+        labelEl.style.color = 'var(--text-muted)';
+      }
     }
-    const labelEl = row.querySelector('.field-label');
-    if (labelEl) {
-      labelEl.style.color = 'var(--text-muted)';
-    }
-  }
 
-  // Auto-confirm categories where all fields are resolved
-  autoConfirmCategories(spec.filename);
-
-  rewindRecord('acceptField', 'Accept Field', `"${field}" = "${value}" (${source}) on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    // Auto-confirm categories where all fields are resolved
+    autoConfirmCategories(spec.filename);
+  });
 
   // Re-render tabs to update counts
   renderCategoryForm();
@@ -2986,7 +3082,7 @@ function acceptField(field, value, source, updateInput = true) {
   renderCategoryFooter();
   renderBounceBar();
   updateSpecimenCompletionStatus(spec.filename);
-  scheduleInProgressSave(spec.filename);
+  scheduleSaveState(spec.filename);
 }
 
 function autoConfirmCategories(filename) {
@@ -3227,11 +3323,8 @@ async function exportProject() {
 
 function showExportWarningDialog(incomplete) {
   // Create modal overlay
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-  overlay.style.alignItems = 'center';
-  overlay.style.justifyContent = 'center';
+  const shell = createPopupShell({ zIndex: 10000 });
+  const overlay = shell.overlay;
 
   const listItems = incomplete.map(s =>
     `<div style="padding:3px 0;font-size:var(--fs-12);font-family:var(--font-mono)"><span style="color:var(--warning);min-width:30px;display:inline-block">#${s.index}</span> ${escapeHtml(getDisplayFilename(s.filename))} <span style="color:var(--text-muted)">(${s.reason})</span></div>`
@@ -3253,12 +3346,10 @@ function showExportWarningDialog(incomplete) {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-
-  document.getElementById('export-cancel').addEventListener('click', () => overlay.remove());
+  const close = shell.close;
+  document.getElementById('export-cancel').addEventListener('click', close);
   document.getElementById('export-anyway').addEventListener('click', () => {
-    overlay.remove();
+    close();
     showFinalExportWarning(incomplete);
   });
 }
@@ -3275,9 +3366,8 @@ function showFinalExportWarning(incomplete) {
     totalUnreviewed += (result.totalFields - result.resolvedFields);
   }
 
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ zIndex: 10000 });
+  const overlay = shell.overlay;
 
   overlay.innerHTML = `
     <div style="background:var(--bg-secondary);border:1px solid var(--error);border-radius:var(--radius);padding:24px;max-width:520px;cursor:default" onclick="event.stopPropagation()">
@@ -3309,19 +3399,18 @@ function showFinalExportWarning(incomplete) {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.getElementById('final-cancel').addEventListener('click', () => overlay.remove());
+  const close = shell.close;
+  document.getElementById('final-cancel').addEventListener('click', close);
 
   // Option 1: Leave blank (recommended) — NO state mutation (issue #1)
   document.getElementById('option-blank').addEventListener('click', async () => {
-    overlay.remove();
+    close();
     await doExport('blank', incomplete);
   });
 
   // Option 2: Populate with VV suggestions — NO state mutation (issue #1)
   document.getElementById('option-populate').addEventListener('click', async () => {
-    overlay.remove();
+    close();
     await doExport('populate', incomplete);
   });
 }
@@ -3469,7 +3558,13 @@ function toggleSpecimenFlagState(spec, options = {}) {
     tool = null,
   } = options;
 
-  const _rwBefore = rewindCapture([spec.filename], [], { flagged: true });
+  const commitRewind = startRewindEntry({
+    action: 'toggleFlag',
+    label: 'Toggle Flag',
+    summary: (result) => `${result.label} ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename],
+    opts: { flagged: true },
+  });
 
   let didFlag = false;
   let didUnflag = false;
@@ -3514,7 +3609,7 @@ function toggleSpecimenFlagState(spec, options = {}) {
     setTimeout(() => {
       const note = prompt('Flag note (optional):');
       specState.flag_note = note || '';
-      rewindRecord('toggleFlag', 'Toggle Flag', `Flagged ${getDisplayFilename(spec.filename)}`, _rwBefore);
+      commitRewind({ label: 'Flagged' });
       scheduleSaveState(spec.filename);
     }, 50);
   } else {
@@ -3522,7 +3617,7 @@ function toggleSpecimenFlagState(spec, options = {}) {
     if (didFlag) label = 'Flagged';
     else if (didUnflag) label = 'Unflagged';
     else label = 'Tag changed';
-    rewindRecord('toggleFlag', 'Toggle Flag', `${label} ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    commitRewind({ label });
     scheduleSaveState(spec.filename);
   }
 
@@ -3569,15 +3664,19 @@ function renderFormFlagFlair() {
       const tool = btn.dataset.tool;
       const st = APP.state.specimens?.[filename];
       if (!st) return;
-      const _rwBefore = rewindCapture([filename], [], { flagged: true });
-      removeTagFromSpecimen(filename, tool);
-      // If no tags remain, auto-unflag (nuclear reset for this specimen)
-      if ((st.flag_tags || []).length === 0) {
-        st.flagged = false;
-        st.flag_note = '';
-      }
-      st.last_touched = new Date().toISOString();
-      rewindRecord('tagFlag', 'Remove Flag Tag', `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`, _rwBefore);
+      withRewind({
+        action: 'tagFlag', label: 'Remove Flag Tag',
+        summary: `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`,
+        filenames: [filename], opts: { flagged: true },
+      }, () => {
+        removeTagFromSpecimen(filename, tool);
+        // If no tags remain, auto-unflag (nuclear reset for this specimen)
+        if ((st.flag_tags || []).length === 0) {
+          st.flagged = false;
+          st.flag_note = '';
+        }
+        st.last_touched = new Date().toISOString();
+      });
       scheduleSaveState(filename);
       updateNavBar();
       updateFormFlagButtonUi(!!st.flagged);
@@ -3627,7 +3726,6 @@ function wireFormFlagNote() {
   const spec = APP.specimens[APP.currentIndex];
   if (!spec) return;
 
-  let before = null;
   let originalValue = input.value;
 
   const ensureFlagged = () => {
@@ -3643,24 +3741,25 @@ function wireFormFlagNote() {
   const commit = () => {
     const specState = APP.state.specimens?.[spec.filename];
     if (!specState?.flagged) {
-      before = null;
       return;
     }
 
     const nextValue = input.value;
     if (nextValue === originalValue) return;
 
-    if (!before) before = rewindCapture([spec.filename], [], { flagged: true });
-    specState.flag_note = nextValue;
-    specState.last_touched = new Date().toISOString();
-    rewindRecord('flagNote', 'Flag Note', `Updated flag note on ${getDisplayFilename(spec.filename)}`, before);
-    before = null;
+    withRewind({
+      action: 'flagNote', label: 'Flag Note',
+      summary: `Updated flag note on ${getDisplayFilename(spec.filename)}`,
+      filenames: [spec.filename], opts: { flagged: true },
+    }, () => {
+      specState.flag_note = nextValue;
+      specState.last_touched = new Date().toISOString();
+    });
     originalValue = nextValue;
     scheduleSaveState(spec.filename);
   };
 
   input.addEventListener('focus', () => {
-    before = rewindCapture([spec.filename], [], { flagged: true });
     originalValue = input.value;
   });
   input.addEventListener('keydown', (e) => {
@@ -3715,6 +3814,7 @@ function normalizeSaveTargets(targets) {
  */
 function scheduleSaveState(targets) {
   invalidateFocusAnalysisCaches();
+  invalidatePreloadedViews();
   scheduleProjectSave();
   updateNavBar();
 
@@ -4052,8 +4152,116 @@ function rebuildSpecimenIndexMap() {
   APP.specimens.forEach((s, i) => specimenIndexMap.set(s.filename, i));
 }
 let tableSelectedIndex = 0;
-let tableImageType = 'collage';
-let tableImageZoomMode = 'fit';
+let tableImageType = APP.imageType;
+let tableImageZoomMode = APP.imageZoomMode;
+
+function normalizeImageType(value) {
+  return value === 'original' ? 'original' : 'collage';
+}
+
+function normalizeImageZoomMode(value) {
+  return value === 'zoom' ? 'zoom' : 'fit';
+}
+
+function getGlobalImageType() {
+  return APP.imageType || tableImageType || 'collage';
+}
+
+function persistProjectImagePreferences({ schedule = true } = {}) {
+  if (!APP.project) return;
+  const nextType = normalizeImageType(APP.imageType);
+  const nextZoomMode = normalizeImageZoomMode(APP.imageZoomMode);
+  let changed = false;
+  if (APP.project.image_type !== nextType) {
+    APP.project.image_type = nextType;
+    changed = true;
+  }
+  if (APP.project.image_zoom_mode !== nextZoomMode) {
+    APP.project.image_zoom_mode = nextZoomMode;
+    changed = true;
+  }
+  if (changed && schedule) scheduleProjectSave();
+}
+
+function applyProjectImagePreferences(project = APP.project) {
+  const nextType = normalizeImageType(project?.image_type);
+  const nextZoomMode = normalizeImageZoomMode(project?.image_zoom_mode);
+  APP.imageType = nextType;
+  tableImageType = nextType;
+  APP.imageZoomMode = nextZoomMode;
+  tableImageZoomMode = nextZoomMode;
+  if (project) {
+    project.image_type = nextType;
+    project.image_zoom_mode = nextZoomMode;
+  }
+}
+
+function setGlobalImageType(value) {
+  const next = normalizeImageType(value);
+  APP.imageType = next;
+  tableImageType = next;
+  persistProjectImagePreferences();
+}
+
+function getGlobalImageZoomMode() {
+  return APP.imageZoomMode || tableImageZoomMode || 'fit';
+}
+
+function setGlobalImageZoomMode(value) {
+  const next = normalizeImageZoomMode(value);
+  APP.imageZoomMode = next;
+  tableImageZoomMode = next;
+  persistProjectImagePreferences();
+}
+
+function setSlideSwitchValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let matched = false;
+  el.querySelectorAll('.slide-switch-option').forEach(opt => {
+    const isActive = opt.dataset.value === value;
+    opt.classList.toggle('active', isActive);
+    if (isActive) matched = true;
+  });
+  if (matched) positionThumb(el, id);
+}
+
+function refreshSlideSwitchLayout(root = document) {
+  root.querySelectorAll('.slide-switch[id]').forEach((switchEl) => {
+    if (switchEl.getClientRects().length === 0) return;
+    positionThumb(switchEl, switchEl.id);
+  });
+}
+
+function syncMountedImagePreferenceUi({ refreshVisibleImage = true } = {}) {
+  const imageType = getGlobalImageType();
+  const zoomMode = getGlobalImageZoomMode();
+
+  setSlideSwitchValue('image-type-switch', imageType);
+  setSlideSwitchValue('table-image-switch', imageType);
+  setSlideSwitchValue('focus-image-switch', imageType);
+  setSlideSwitchValue('image-zoom-switch', zoomMode);
+  setSlideSwitchValue('table-zoom-switch', zoomMode);
+  setSlideSwitchValue('focus-zoom-switch', zoomMode);
+
+  applyImageZoomMode('image-container', zoomMode);
+  applyImageZoomMode('table-image-container', zoomMode);
+  applyImageZoomMode('focus-image-container', zoomMode);
+
+  if (!refreshVisibleImage) return;
+  if (APP.currentView === 'review') {
+    loadImage();
+    return;
+  }
+  if (APP.currentView === 'table') {
+    loadTableImage(tableSelectedIndex);
+    return;
+  }
+  if (APP.currentView === 'focus') {
+    if (tableSelectedIndex >= 0) loadFocusImage(tableSelectedIndex);
+    renderFocusCarousel();
+  }
+}
 let tableEditingLocked = true;
 let tableSelectedCell = null;   // Currently highlighted td element
 let tableSelectedField = null;  // Field name of last selected cell (survives virtual scroll)
@@ -4268,7 +4476,7 @@ async function renderTableView() {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], tableImageType, (val) => {
-    tableImageType = val;
+    setGlobalImageType(val);
     loadTableImage(tableSelectedIndex);
   });
   document.getElementById('table-image-switch-container').innerHTML = tableImgSw.html;
@@ -4278,7 +4486,7 @@ async function renderTableView() {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], tableImageZoomMode, (val) => {
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
     applyImageZoomMode('table-image-container', val);
   });
   document.getElementById('table-zoom-switch-container').innerHTML = tableZoomSw.html;
@@ -4290,8 +4498,7 @@ async function renderTableView() {
     { value: 'table', label: 'Table' },
     { value: 'focus', label: 'Focus' }
   ], 'table', (val) => {
-    if (val === 'review') { showView('review'); renderReviewView(); }
-    else if (val === 'focus') { showView('focus'); renderFocusView(); }
+    if (val !== 'table') openAppView(val);
   });
   document.getElementById('table-view-switch-container').innerHTML = tableSw.html;
   tableSw.setup();
@@ -4340,6 +4547,8 @@ async function renderTableView() {
   }
 
   hideNavSpinner();
+  if (_isPreloadingViews) markPreloadedViewReady('table', tableSelectedIndex);
+  else consumePreloadedView('table');
 }
 
 async function loadTableImage(index) {
@@ -4351,7 +4560,11 @@ async function loadTableImage(index) {
   const dataUrl = await window.api.getImage(APP.folderPath, spec.filename, tableImageType, 'full');
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(spec.filename))}">`;
-    container.querySelector('img').addEventListener('click', () => openImageModal(dataUrl));
+    container.querySelector('img').addEventListener('click', () => openSpecimenImagePopup({
+      filename: spec.filename,
+      initialImageType: tableImageType,
+      initialZoomMode: tableImageZoomMode,
+    }));
     applyImageZoomMode('table-image-container', tableImageZoomMode);
   } else {
     container.innerHTML = `<div class="table-image-placeholder">${tableImageType === 'original' ? 'Original not available' : 'No image'}</div>`;
@@ -4833,28 +5046,31 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
 
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
 
-    const _rwBefore = rewindCapture([spec.filename], [fieldName], { categories_confirmed: true });
+    withRewind({
+      action: 'cellEdit', label: 'Cell Edit',
+      summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+      filenames: [spec.filename], fields: [fieldName], opts: { categories_confirmed: true },
+    }, () => {
+      const aiValue = originalFj[fieldName] !== undefined ? String(originalFj[fieldName]) : '';
+      let source;
+      if (newValue === aiValue && aiValue !== '') source = 'ai';
+      else if (aiValue === '' && newValue !== '') source = 'user_added';
+      else if (newValue === '') source = 'confirmed_empty';
+      else source = 'edited';
 
-    const aiValue = originalFj[fieldName] !== undefined ? String(originalFj[fieldName]) : '';
-    let source;
-    if (newValue === aiValue && aiValue !== '') source = 'ai';
-    else if (aiValue === '' && newValue !== '') source = 'user_added';
-    else if (newValue === '') source = 'confirmed_empty';
-    else source = 'edited';
+      APP.state.specimens[spec.filename].accepted_fields[fieldName] = { value: newValue, source };
+      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
 
-    APP.state.specimens[spec.filename].accepted_fields[fieldName] = { value: newValue, source };
-    APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+      // Clear unconfirmed state
+      if (APP.state.specimens[spec.filename].unconfirmed_fields) {
+        delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
+      }
 
-    // Clear unconfirmed state
-    if (APP.state.specimens[spec.filename].unconfirmed_fields) {
-      delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
-    }
-
-    td.classList.remove('cell-unaccepted');
-    td.classList.add('cell-accepted');
-    td.title = newValue;
-    autoConfirmCategories(spec.filename);
-    rewindRecord('cellEdit', 'Cell Edit', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+      td.classList.remove('cell-unaccepted');
+      td.classList.add('cell-accepted');
+      td.title = newValue;
+      autoConfirmCategories(spec.filename);
+    });
     scheduleSaveState(spec.filename);
     scheduleAutoSaveReviewed(spec.filename);
     scheduleTableRerender();
@@ -4871,12 +5087,16 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
 
     // Persist unconfirmed change to state
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    const _rwBefore = rewindCapture([spec.filename], [fieldName]);
-    if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
-      APP.state.specimens[spec.filename].unconfirmed_fields = {};
-    }
-    APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
-    rewindRecord('cellEdit', 'Cell Edit (limbo)', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    withRewind({
+      action: 'cellEdit', label: 'Cell Edit (limbo)',
+      summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+      filenames: [spec.filename], fields: [fieldName],
+    }, () => {
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
+        APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      }
+      APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
+    });
     scheduleSaveState(spec.filename);
     scheduleTableRerender();
   };
@@ -4891,9 +5111,13 @@ function startCellEdit(td, specimenIndex, fieldName, allFields) {
 
     // Clear unconfirmed state
     if (APP.state.specimens[spec.filename]?.unconfirmed_fields?.[fieldName] !== undefined) {
-      const _rwBefore = rewindCapture([spec.filename], [fieldName]);
-      delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
-      rewindRecord('cellCancel', 'Cancel Edit', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+      withRewind({
+        action: 'cellCancel', label: 'Cancel Edit',
+        summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+        filenames: [spec.filename], fields: [fieldName],
+      }, () => {
+        delete APP.state.specimens[spec.filename].unconfirmed_fields[fieldName];
+      });
       scheduleSaveState(spec.filename);
     }
     scheduleTableRerender();
@@ -5046,8 +5270,7 @@ async function renderFocusView() {
     { value: 'table', label: 'Table' },
     { value: 'focus', label: 'Focus' }
   ], 'focus', (val) => {
-    if (val === 'review') { showView('review'); renderReviewView(); }
-    else if (val === 'table') { showView('table'); renderTableView(); }
+    if (val !== 'focus') openAppView(val);
   });
   document.getElementById('focus-view-switch-container').innerHTML = focusSw.html;
   focusSw.setup();
@@ -5057,7 +5280,7 @@ async function renderFocusView() {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], tableImageType, (val) => {
-    tableImageType = val;
+    setGlobalImageType(val);
     if (tableSelectedIndex >= 0) loadFocusImage(tableSelectedIndex);
     renderFocusCarousel();
   });
@@ -5068,7 +5291,7 @@ async function renderFocusView() {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], tableImageZoomMode, (val) => {
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
     applyImageZoomMode('focus-image-container', val);
   });
   document.getElementById('focus-zoom-switch-container').innerHTML = focusZoomSw.html;
@@ -5104,6 +5327,8 @@ async function renderFocusView() {
   // Start with no specimen selected — user must click to select
   tableSelectedIndex = -1;
   hideNavSpinner();
+  if (_isPreloadingViews) markPreloadedViewReady('focus', tableSelectedIndex);
+  else consumePreloadedView('focus');
 }
 
 function getCategoryColorForField(field) {
@@ -5206,9 +5431,8 @@ function isFieldBatchAcceptedWithVoucherVision(field) {
 
 
 function showConfirmAllPopup(field) {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ zIndex: 10000 });
+  const overlay = shell.overlay;
   overlay.innerHTML = `
     <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:450px;cursor:default" onclick="event.stopPropagation()">
       ${popupCloseBtnHtml('confirm-all-close', 'Close', true)}
@@ -5221,12 +5445,11 @@ function showConfirmAllPopup(field) {
       </div>
     </div>
   `;
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.getElementById('confirm-all-close').addEventListener('click', () => overlay.remove());
-  document.getElementById('confirm-all-cancel').addEventListener('click', () => overlay.remove());
+  const close = shell.close;
+  document.getElementById('confirm-all-close').addEventListener('click', close);
+  document.getElementById('confirm-all-cancel').addEventListener('click', close);
   document.getElementById('confirm-all-go').addEventListener('click', () => {
-    overlay.remove();
+    close();
     confirmAllFieldValues(field);
   });
 }
@@ -5240,38 +5463,41 @@ async function confirmAllFieldValues(field) {
   await ensureAllSpecimensCached();
 
   const allFilenames = APP.specimens.map(s => s.filename);
-  const _rwBefore = rewindCapture(allFilenames, [field], { categories_confirmed: true });
+  withRewind({
+    action: 'confirmAll', label: 'Confirm All',
+    summary: `"${field}" across ${APP.specimens.length} specimens`,
+    filenames: allFilenames, fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    for (const spec of APP.specimens) {
+      const st = APP.state.specimens[spec.filename];
 
-  for (const spec of APP.specimens) {
-    const st = APP.state.specimens[spec.filename];
+      // Resolve unconfirmed first
+      const unconfVal = st.unconfirmed_fields?.[field];
+      if (unconfVal !== undefined) {
+        const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[field];
+        const aiStr = aiValue !== undefined ? String(aiValue) : '';
+        let source;
+        if (unconfVal === aiStr && aiStr !== '') source = 'ai';
+        else if (aiStr === '' && unconfVal !== '') source = 'user_added';
+        else if (unconfVal === '') source = 'confirmed_empty';
+        else source = 'edited';
+        st.accepted_fields[field] = { value: unconfVal, source };
+        delete st.unconfirmed_fields[field];
+      } else if (!st.accepted_fields?.[field]) {
+        // Pending (unaccepted) — accept AI value as-is
+        const cached = tableDataCache[spec.filename];
+        const fj = cached?.formatted_json || {};
+        const val = fj[field] !== undefined ? String(fj[field]) : '';
+        st.accepted_fields[field] = { value: val, source: val === '' ? 'confirmed_empty' : 'ai' };
+      }
 
-    // Resolve unconfirmed first
-    const unconfVal = st.unconfirmed_fields?.[field];
-    if (unconfVal !== undefined) {
-      const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[field];
-      const aiStr = aiValue !== undefined ? String(aiValue) : '';
-      let source;
-      if (unconfVal === aiStr && aiStr !== '') source = 'ai';
-      else if (aiStr === '' && unconfVal !== '') source = 'user_added';
-      else if (unconfVal === '') source = 'confirmed_empty';
-      else source = 'edited';
-      st.accepted_fields[field] = { value: unconfVal, source };
-      delete st.unconfirmed_fields[field];
-    } else if (!st.accepted_fields?.[field]) {
-      // Pending (unaccepted) — accept AI value as-is
-      const cached = tableDataCache[spec.filename];
-      const fj = cached?.formatted_json || {};
-      const val = fj[field] !== undefined ? String(fj[field]) : '';
-      st.accepted_fields[field] = { value: val, source: val === '' ? 'confirmed_empty' : 'ai' };
+      st.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+      scheduleAutoSaveReviewed(spec.filename);
     }
+  });
 
-    st.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-    scheduleAutoSaveReviewed(spec.filename);
-  }
-
-  rewindRecord('confirmAll', 'Confirm All', `"${field}" across ${APP.specimens.length} specimens`, _rwBefore);
-  scheduleSaveState(APP.specimens.map(s => s.filename));
+  scheduleSaveState(allFilenames);
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
 }
@@ -5280,30 +5506,33 @@ async function confirmModifiedField(field) {
   await ensureAllSpecimensCached();
 
   const modifiedFilenames = APP.specimens.filter(s => APP.state.specimens[s.filename]?.unconfirmed_fields?.[field] !== undefined).map(s => s.filename);
-  const _rwBefore = rewindCapture(modifiedFilenames, [field], { categories_confirmed: true });
+  withRewind({
+    action: 'confirmModified', label: 'Confirm Modified',
+    summary: `"${field}" on ${modifiedFilenames.length} specimen${modifiedFilenames.length !== 1 ? 's' : ''}`,
+    filenames: modifiedFilenames, fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    for (const spec of APP.specimens) {
+      const st = APP.state.specimens[spec.filename];
+      if (st?.unconfirmed_fields?.[field] === undefined) continue; // Only touch limbo entries
 
-  for (const spec of APP.specimens) {
-    const st = APP.state.specimens[spec.filename];
-    if (st?.unconfirmed_fields?.[field] === undefined) continue; // Only touch limbo entries
+      if (!st.accepted_fields) st.accepted_fields = {};
+      const val = st.unconfirmed_fields[field];
+      const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[field];
+      const aiStr = aiValue !== undefined ? String(aiValue) : '';
+      let source;
+      if (val === aiStr && aiStr !== '') source = 'ai';
+      else if (aiStr === '' && val !== '') source = 'user_added';
+      else if (val === '') source = 'confirmed_empty';
+      else source = 'edited';
 
-    if (!st.accepted_fields) st.accepted_fields = {};
-    const val = st.unconfirmed_fields[field];
-    const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[field];
-    const aiStr = aiValue !== undefined ? String(aiValue) : '';
-    let source;
-    if (val === aiStr && aiStr !== '') source = 'ai';
-    else if (aiStr === '' && val !== '') source = 'user_added';
-    else if (val === '') source = 'confirmed_empty';
-    else source = 'edited';
+      st.accepted_fields[field] = { value: val, source };
+      delete st.unconfirmed_fields[field];
+      st.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+      scheduleAutoSaveReviewed(spec.filename);
+    }
+  });
 
-    st.accepted_fields[field] = { value: val, source };
-    delete st.unconfirmed_fields[field];
-    st.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-    scheduleAutoSaveReviewed(spec.filename);
-  }
-
-  rewindRecord('confirmModified', 'Confirm Modified', `"${field}" on ${modifiedFilenames.length} specimen${modifiedFilenames.length !== 1 ? 's' : ''}`, _rwBefore);
   scheduleSaveState(modifiedFilenames);
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
@@ -5585,9 +5814,8 @@ function getEditorToolCategories() {
 }
 
 function showApplyCancelPopup(title, bodyHtml, onApply, applyLabel = 'Apply') {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ zIndex: 10000 });
+  const overlay = shell.overlay;
   overlay.innerHTML = `
     <div style="position:relative;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:460px;width:min(460px,calc(100vw - 32px));cursor:default" onclick="event.stopPropagation()">
       ${popupCloseBtnHtml('apply-cancel-popup-close', 'Close', true)}
@@ -5600,9 +5828,7 @@ function showApplyCancelPopup(title, bodyHtml, onApply, applyLabel = 'Apply') {
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const close = shell.close;
 
   overlay.querySelector('#apply-cancel-popup-close')?.addEventListener('click', close);
   overlay.querySelector('#apply-cancel-popup-cancel')?.addEventListener('click', close);
@@ -5632,7 +5858,12 @@ function getPopupFieldSelectorHtml(controlId, selectedField, options = {}) {
     fields = getAvailableProjectFields(),
     prevNext = false,
     selectedFieldLabel = 'Field',
+    mismatchCounts = null,
   } = options;
+
+  const hasMismatchCounts = mismatchCounts && typeof mismatchCounts === 'object';
+  const selectedHasWarnings = !!(hasMismatchCounts && selectedField && mismatchCounts[selectedField] > 0);
+  const labelClass = hasMismatchCounts ? 'focus-popup-field-label ocr-popup-field-label' : 'focus-popup-field-label';
 
   return `
     <div class="focus-popup-header-controls">
@@ -5640,11 +5871,16 @@ function getPopupFieldSelectorHtml(controlId, selectedField, options = {}) {
         <button class="btn-sm" type="button" data-field-nav="prev" title="Previous field">&#8592;</button>
         <button class="btn-sm" type="button" data-field-nav="next" title="Next field">&#8594;</button>
       ` : ''}
-      <label class="focus-popup-field-label">
+      <label class="${labelClass}">
         <span>${escapeHtml(selectedFieldLabel)}</span>
+        ${selectedHasWarnings ? `<span class="ocr-popup-field-warning" title="This field contains OCR disagreements">${getOcrWarningIconSvg()}</span>` : ''}
         <select id="${controlId}" class="focus-popup-field-select">
           ${includeEmpty ? `<option value="">${escapeHtml(emptyLabel)}</option>` : ''}
-          ${fields.map(field => `<option value="${escapeAttr(field)}" ${field === selectedField ? 'selected' : ''}>${escapeHtml(field)}</option>`).join('')}
+          ${fields.map(field => {
+            const warn = hasMismatchCounts && (mismatchCounts[field] || 0) > 0;
+            const label = warn ? `⚠ ${field}` : field;
+            return `<option value="${escapeAttr(field)}" ${field === selectedField ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+          }).join('')}
         </select>
       </label>
     </div>
@@ -5759,10 +5995,191 @@ function flagAndTagHtml(filename, flagSize = 12, tool = null) {
   return `${flagHtml}${btn}`;
 }
 
-function createFocusToolPopup({ title, intro = '', summaryHtml = '', popupClass = 'focus-review-popup', bodyClass = 'focus-review-body', bodyHtml = '', topHtml = '', footerHtml = '', headerRightHtml = '' }) {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
+// Stack of currently-open popups, topmost last. Global Escape handler
+// (installed once at module load) closes the topmost popup whose
+// onEscape option is truthy.
+const _openPopupStack = [];
+const _popupRecordByElement = new WeakMap();
+function _handleGlobalPopupEscape(e) {
+  if (e.key !== 'Escape' || _openPopupStack.length === 0) return;
+  for (let i = _openPopupStack.length - 1; i >= 0; i--) {
+    const rec = _openPopupStack[i];
+    if (rec.onEscape === false) continue;
+    e.preventDefault();
+    e.stopPropagation();
+    rec.close();
+    return;
+  }
+}
+if (typeof document !== 'undefined' && !document.__vvgoPopupEscapeInstalled) {
+  document.addEventListener('keydown', _handleGlobalPopupEscape);
+  document.__vvgoPopupEscapeInstalled = true;
+}
+
+function closePopupElement(overlay) {
+  if (!overlay) return;
+  const record = _popupRecordByElement.get(overlay);
+  if (record?.close) {
+    record.close();
+    return;
+  }
+  overlay.remove();
+}
+
+function closePopupById(id) {
+  if (!id) return;
+  closePopupElement(document.getElementById(id));
+}
+
+function bindPopupLifecycle(overlay, {
+  overlayId = null,
+  dismissOnOutsideClick = true,
+  onEscape = true,
+  onClose = null,
+  zIndex = null,
+  overlayClass = null,
+} = {}) {
+  if (overlayClass) overlay.className = overlayClass;
   overlay.style.cursor = 'default';
+  if (overlayId) overlay.id = overlayId;
+  if (zIndex != null) overlay.style.zIndex = String(zIndex);
+
+  let closed = false;
+  const record = { overlay, close: null, onEscape, onClose, observer: null };
+  const finish = (runOnClose = true) => {
+    if (closed) return;
+    closed = true;
+    if (record.observer) record.observer.disconnect();
+    const i = _openPopupStack.indexOf(record);
+    if (i !== -1) _openPopupStack.splice(i, 1);
+    _popupRecordByElement.delete(overlay);
+    delete overlay.__vvgoClose;
+    if (runOnClose && typeof onClose === 'function') {
+      try { onClose(); } catch (e) { console.warn('popup onClose threw:', e); }
+    }
+  };
+  const close = () => {
+    if (closed) return;
+    if (overlay.isConnected) overlay.remove();
+    finish(true);
+  };
+  record.close = close;
+  overlay.__vvgoClose = close;
+
+  if (dismissOnOutsideClick) {
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  }
+
+  document.body.appendChild(overlay);
+  record.observer = new MutationObserver(() => {
+    if (!overlay.isConnected) finish(true);
+  });
+  record.observer.observe(document.body, { childList: true });
+  _popupRecordByElement.set(overlay, record);
+  _openPopupStack.push(record);
+
+  return { overlay, close, record };
+}
+
+/**
+ * Lifecycle-only popup shell. Useful when a popup wants to provide its own
+ * header/body HTML but still benefit from the shared overlay behaviors:
+ * toggle-on-repeat (overlayId), click-outside dismiss, Escape-closes-topmost,
+ * stacking, onClose callback. Returns { overlay, close } — the caller writes
+ * their own popup markup into `overlay.innerHTML`. Returns null if a popup
+ * with the same overlayId already exists (toggle-off behavior).
+ */
+function createPopupShell({
+  overlayId = null,
+  dismissOnOutsideClick = true,
+  onEscape = true,
+  onClose = null,
+  zIndex = null,
+  overlayClass = 'image-modal-overlay',
+} = {}) {
+  if (overlayId) {
+    const existing = document.getElementById(overlayId);
+    if (existing) { closePopupElement(existing); return null; }
+  }
+
+  const overlay = document.createElement('div');
+  return bindPopupLifecycle(overlay, {
+    overlayId,
+    dismissOnOutsideClick,
+    onEscape,
+    onClose,
+    zIndex,
+    overlayClass,
+  });
+}
+
+// ── Shared preview-image swap helper ────────────────────────────
+//
+// Every tool popup used to do `imageEl.innerHTML = '<div>Loading…</div>'`
+// *before* awaiting the image — that's the visible black flash. This helper:
+//   1. Keeps the existing image in place while the new one loads.
+//   2. Preloads the new image off-DOM and awaits .decode() so the swap is
+//      paint-ready (no half-rendered frame).
+//   3. Issues a per-container sequence token so rapid row clicks don't
+//      paint a stale image over a newer one.
+//
+// Usage:
+//   swapPreviewImage(imageEl, dataUrlOrNull, { altText, onClick, emptyHtml });
+//
+// When dataUrl is null/falsy, paints emptyHtml (defaults to a placeholder).
+// The helper shows a "Loading…" placeholder ONLY if the container currently
+// has no <img> (first paint) — subsequent swaps keep the old image visible.
+const _previewSwapTokens = new WeakMap();
+async function swapPreviewImage(imageEl, dataUrl, { altText = '', onClick = null, emptyHtml = null } = {}) {
+  if (!imageEl) return;
+  const token = (_previewSwapTokens.get(imageEl) || 0) + 1;
+  _previewSwapTokens.set(imageEl, token);
+  const isStale = () => _previewSwapTokens.get(imageEl) !== token || !imageEl.isConnected;
+
+  if (!dataUrl) {
+    if (isStale()) return;
+    imageEl.innerHTML = emptyHtml || '<div class="table-image-placeholder">No image</div>';
+    return;
+  }
+
+  // First paint (no image yet): show placeholder so users know something's loading.
+  // Subsequent swaps: keep the current image visible until the new one is decoded.
+  if (!imageEl.querySelector('img')) {
+    imageEl.innerHTML = '<div class="table-image-placeholder">Loading…</div>';
+  }
+
+  const newImg = new Image();
+  newImg.alt = altText;
+  newImg.src = dataUrl;
+  try {
+    if (typeof newImg.decode === 'function') await newImg.decode();
+  } catch {
+    // decode() can reject on abort / bad data — fall through to swap anyway
+  }
+  if (isStale()) return;
+  if (typeof onClick === 'function') newImg.addEventListener('click', onClick);
+  imageEl.replaceChildren(newImg);
+}
+
+function createFocusToolPopup({
+  title, intro = '', summaryHtml = '',
+  popupClass = 'focus-review-popup',
+  bodyClass = 'focus-review-body',
+  bodyHtml = '', topHtml = '',
+  footerHtml = '', headerRightHtml = '',
+  overlayId = null,                // toggle-on-repeat: if an element with this id already exists, remove it and return null
+  dismissOnOutsideClick = true,    // click on overlay (outside popup) dismisses
+  onEscape = true,                 // Escape key dismisses (handled via _openPopupStack)
+  onClose = null,                  // callback fired after remove()
+  zIndex = null,                   // override z-index (e.g. 10000 for confirmations stacking over other popups)
+} = {}) {
+  // Toggle-on-repeat for popups that use a known overlay id
+  if (overlayId) {
+    const existing = document.getElementById(overlayId);
+    if (existing) { closePopupElement(existing); return null; }
+  }
+
+  const overlay = document.createElement('div');
   overlay.innerHTML = `
     <div class="${popupClass}" onclick="event.stopPropagation()">
       <div class="name-parser-header">
@@ -5780,9 +6197,14 @@ function createFocusToolPopup({ title, intro = '', summaryHtml = '', popupClass 
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const { close } = bindPopupLifecycle(overlay, {
+    overlayId,
+    dismissOnOutsideClick,
+    onEscape,
+    onClose,
+    zIndex,
+    overlayClass: 'image-modal-overlay',
+  });
   overlay.querySelector('[data-focus-popup-close]')?.addEventListener('click', close);
 
   return {
@@ -5838,67 +6260,6 @@ function renderFocusPopupSpecimenRow(item, options = {}) {
       ${detail ? `<span class="focus-popup-row-detail ${detailClass}">${detail}</span>` : ''}
     </div>
   `;
-}
-
-function showSpecimenImageReferencePopup(filename, title = '', fieldLabel = '', fieldValue = '') {
-  if (!filename) return;
-  const displayValue = fieldValue === ''
-    ? '<span class="cell-empty-placeholder">(empty)</span>'
-    : escapeHtml(String(fieldValue));
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-  overlay.innerHTML = `
-    <div class="cluster-gallery-popup focus-image-reference-popup" onclick="event.stopPropagation()">
-      <div class="name-parser-header">
-        <span>${escapeHtml(title || getDisplayFilename(filename))}</span>
-        ${popupCloseBtnHtml('focus-image-reference-close')}
-      </div>
-      <div class="cluster-gallery-toggle" id="focus-image-reference-toggle"></div>
-      <div class="focus-image-reference-meta">
-        <div class="focus-image-reference-field">${escapeHtml(fieldLabel || '')}</div>
-        <div class="focus-image-reference-value">${displayValue}</div>
-      </div>
-      <div class="wfo-reference-images" id="focus-image-reference-images">
-        <div class="table-image-placeholder">Loading...</div>
-      </div>
-    </div>
-  `;
-
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
-  overlay.querySelector('#focus-image-reference-close')?.addEventListener('click', close);
-
-  let imageType = tableImageType;
-  const loadImage = async () => {
-    const container = overlay.querySelector('#focus-image-reference-images');
-    if (!container) return;
-    container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
-    const dataUrl = await window.api.getImage(APP.folderPath, filename, imageType, 'full');
-    if (!container.isConnected) return;
-    if (dataUrl) {
-      container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(filename))}">`;
-      container.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      container.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
-  };
-
-  const switchControl = createSlideSwitch('focus-image-reference-switch', [
-    { value: 'collage', label: 'Collage' },
-    { value: 'original', label: 'Original' }
-  ], imageType, (val) => {
-    imageType = val;
-    loadImage();
-  });
-  const switchContainer = overlay.querySelector('#focus-image-reference-toggle');
-  if (switchContainer) {
-    switchContainer.innerHTML = switchControl.html;
-    switchControl.setup();
-  }
-
-  loadImage();
 }
 
 function renderFocusReviewGroup({ title, meta = [], actionsHtml = '', bodyHtml = '' }) {
@@ -6174,8 +6535,8 @@ function showAttributionEditorPopup(attributionFields) {
   }
 
   let activeFilename = rows[0]?.filename || null;
-  let imageType = tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
   let editorMode = 'dnd'; // 'dnd' or 'preview'
 
   // Build header labels
@@ -6201,8 +6562,8 @@ function showAttributionEditorPopup(attributionFields) {
       <div class="attribution-editor-resize" id="attribution-editor-resize"></div>
       <div class="attribution-editor-preview" id="attribution-editor-right">
         <div class="cluster-gallery-toggle image-viewer-toggle-row">
-          <div id="attribution-preview-toggle"></div>
           <div id="attribution-preview-zoom-toggle"></div>
+          <div id="attribution-preview-toggle"></div>
         </div>
         <div class="attribution-preview-filename" id="attribution-preview-filename"></div>
         <div class="wfo-reference-images image-fit-mode" id="attribution-preview-image">
@@ -6349,7 +6710,11 @@ function showAttributionEditorPopup(attributionFields) {
   const sw = createSlideSwitch(switchId, [
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
-  ], imageType, (val) => { imageType = val; loadPreviewImage(); });
+  ], imageType, (val) => {
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
+    loadPreviewImage();
+  });
   const toggleContainer = popup.overlay.querySelector('#attribution-preview-toggle');
   if (toggleContainer) { toggleContainer.innerHTML = sw.html; sw.setup(); }
 
@@ -6359,8 +6724,8 @@ function showAttributionEditorPopup(attributionFields) {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('attribution-preview-image', val);
   });
   const zoomToggleContainer = popup.overlay.querySelector('#attribution-preview-zoom-toggle');
@@ -6392,12 +6757,11 @@ function showAttributionEditorPopup(attributionFields) {
     const fnEl = popup.overlay.querySelector('#attribution-preview-filename');
     if (!imgEl || !activeFilename) return;
     if (fnEl) fnEl.textContent = getDisplayFilename(activeFilename);
-    imgEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
     const dataUrl = await window.api.getImage(APP.folderPath, activeFilename, imageType, 'full');
-    if (!imgEl.isConnected) return;
-    imgEl.innerHTML = dataUrl
-      ? `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeFilename))}">`
-      : '<div class="table-image-placeholder">No image available</div>';
+    await swapPreviewImage(imgEl, dataUrl, {
+      altText: getDisplayFilename(activeFilename),
+      emptyHtml: '<div class="table-image-placeholder">No image available</div>',
+    });
     applyImageZoomMode('attribution-preview-image', zoomMode);
   }
 
@@ -6514,19 +6878,23 @@ function showAttributionEditorPopup(attributionFields) {
         const save = () => {
           const newVal = input.value.trim();
           if (newVal !== currentVal) {
-            const _rwBefore = rewindCapture([filename], [field]);
-            if (newVal === '') {
-              // Delete the name
-              cell.names.splice(nameIdx, 1);
-            } else {
-              cell.names[nameIdx] = newVal;
-            }
-            if (!APP.state.specimens[filename]) initSpecimenState(filename);
-            const specState = APP.state.specimens[filename];
-            stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
-            specState.last_touched = new Date().toISOString();
-            rewindRecord('attribution', newVal === '' ? 'Attribution Delete' : 'Attribution Edit',
-              `${newVal === '' ? 'Removed' : 'Edited'} name in ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+            withRewind({
+              action: 'attribution',
+              label: newVal === '' ? 'Attribution Delete' : 'Attribution Edit',
+              summary: `${newVal === '' ? 'Removed' : 'Edited'} name in ${field} on ${getDisplayFilename(filename)}`,
+              filenames: [filename], fields: [field],
+            }, () => {
+              if (newVal === '') {
+                // Delete the name
+                cell.names.splice(nameIdx, 1);
+              } else {
+                cell.names[nameIdx] = newVal;
+              }
+              if (!APP.state.specimens[filename]) initSpecimenState(filename);
+              const specState = APP.state.specimens[filename];
+              stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+              specState.last_touched = new Date().toISOString();
+            });
             scheduleSaveState(filename);
           }
           renderRows();
@@ -6554,14 +6922,17 @@ function showAttributionEditorPopup(attributionFields) {
         if (!cell) return;
         const name = cell.names[nameIdx];
 
-        const _rwBefore = rewindCapture([filename], [field]);
-        cell.names.splice(nameIdx + 1, 0, name);
-
-        if (!APP.state.specimens[filename]) initSpecimenState(filename);
-        const specState = APP.state.specimens[filename];
-        stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
-        specState.last_touched = new Date().toISOString();
-        rewindRecord('attribution', 'Attribution Duplicate', `Duplicated "${name}" in ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+        withRewind({
+          action: 'attribution', label: 'Attribution Duplicate',
+          summary: `Duplicated "${name}" in ${field} on ${getDisplayFilename(filename)}`,
+          filenames: [filename], fields: [field],
+        }, () => {
+          cell.names.splice(nameIdx + 1, 0, name);
+          if (!APP.state.specimens[filename]) initSpecimenState(filename);
+          const specState = APP.state.specimens[filename];
+          stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+          specState.last_touched = new Date().toISOString();
+        });
         scheduleSaveState(filename);
         renderRows();
       });
@@ -6581,14 +6952,17 @@ function showAttributionEditorPopup(attributionFields) {
         if (!cell) return;
         const removedName = cell.names[nameIdx];
 
-        const _rwBefore = rewindCapture([filename], [field]);
-        cell.names.splice(nameIdx, 1);
-
-        if (!APP.state.specimens[filename]) initSpecimenState(filename);
-        const specState = APP.state.specimens[filename];
-        stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
-        specState.last_touched = new Date().toISOString();
-        rewindRecord('attribution', 'Attribution Delete', `Removed "${removedName}" from ${field} on ${getDisplayFilename(filename)}`, _rwBefore);
+        withRewind({
+          action: 'attribution', label: 'Attribution Delete',
+          summary: `Removed "${removedName}" from ${field} on ${getDisplayFilename(filename)}`,
+          filenames: [filename], fields: [field],
+        }, () => {
+          cell.names.splice(nameIdx, 1);
+          if (!APP.state.specimens[filename]) initSpecimenState(filename);
+          const specState = APP.state.specimens[filename];
+          stageFieldAsUnconfirmed(specState, field, reconstructFieldValue(cell.names));
+          specState.last_touched = new Date().toISOString();
+        });
         scheduleSaveState(filename);
         renderRows();
       });
@@ -6694,32 +7068,32 @@ function showAttributionEditorPopup(attributionFields) {
           }
         }
 
-        // Capture undo state
-        const _rwBefore = rewindCapture([filename], [data.sourceField, targetField]);
+        const movedName = sourceCell.names[data.sourceIndex];
+        withRewind({
+          action: 'attribution', label: 'Attribution Move',
+          summary: `Moved "${movedName}" from ${data.sourceField} to ${targetField} on ${getDisplayFilename(filename)}`,
+          filenames: [filename], fields: [data.sourceField, targetField],
+        }, () => {
+          // Remove from source
+          sourceCell.names.splice(data.sourceIndex, 1);
 
-        // Remove from source
-        const [movedName] = sourceCell.names.splice(data.sourceIndex, 1);
+          // If same field, adjust insert index if source was before target
+          if (data.sourceField === targetField && data.sourceIndex < insertIdx) {
+            insertIdx = Math.max(0, insertIdx - 1);
+          }
 
-        // If same field, adjust insert index if source was before target
-        if (data.sourceField === targetField && data.sourceIndex < insertIdx) {
-          insertIdx = Math.max(0, insertIdx - 1);
-        }
+          // Insert into target
+          targetCell.names.splice(insertIdx, 0, movedName);
 
-        // Insert into target
-        targetCell.names.splice(insertIdx, 0, movedName);
-
-        // Stage as unconfirmed
-        if (!APP.state.specimens[filename]) initSpecimenState(filename);
-        const specState = APP.state.specimens[filename];
-        stageFieldAsUnconfirmed(specState, data.sourceField, reconstructFieldValue(sourceCell.names));
-        if (data.sourceField !== targetField) {
-          stageFieldAsUnconfirmed(specState, targetField, reconstructFieldValue(targetCell.names));
-        }
-        specState.last_touched = new Date().toISOString();
-
-
-        // Record undo
-        rewindRecord('attribution', 'Attribution Move', `Moved "${movedName}" from ${data.sourceField} to ${targetField} on ${getDisplayFilename(filename)}`, _rwBefore);
+          // Stage as unconfirmed
+          if (!APP.state.specimens[filename]) initSpecimenState(filename);
+          const specState = APP.state.specimens[filename];
+          stageFieldAsUnconfirmed(specState, data.sourceField, reconstructFieldValue(sourceCell.names));
+          if (data.sourceField !== targetField) {
+            stageFieldAsUnconfirmed(specState, targetField, reconstructFieldValue(targetCell.names));
+          }
+          specState.last_touched = new Date().toISOString();
+        });
 
         scheduleSaveState(filename);
         renderRows();
@@ -6818,14 +7192,17 @@ function showClusterValueGalleryPopup(field, value) {
   const matchingRows = getAllValuesForField(field).filter(item => item.value === value);
   if (matchingRows.length === 1) {
     const row = matchingRows[0];
-    window.api.getImage(APP.folderPath, row.filename, tableImageType, 'full').then(fullUrl => {
-      if (fullUrl) openImageModal(fullUrl);
+    openSpecimenImagePopup({
+      filename: row.filename,
+      fieldLabel: field,
+      fieldValue: value,
+      initialImageType: tableImageType,
+      initialZoomMode: tableImageZoomMode,
     });
     return;
   }
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
   overlay.innerHTML = `
     <div class="cluster-gallery-popup" onclick="event.stopPropagation()">
       <div class="name-parser-header">
@@ -6839,12 +7216,10 @@ function showClusterValueGalleryPopup(field, value) {
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const close = shell.close;
   document.getElementById('cluster-gallery-close')?.addEventListener('click', close);
 
-  let imageType = tableImageType;
+  let imageType = getGlobalImageType();
 
   const renderGrid = async () => {
     const grid = overlay.querySelector('#cluster-gallery-grid');
@@ -6870,9 +7245,14 @@ function showClusterValueGalleryPopup(field, value) {
       } else {
         btn.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div><span class="cluster-gallery-caption">${escapeHtml(getDisplayFilename(row.filename, 16))}</span>`;
       }
-      btn.addEventListener('click', async () => {
-        const fullUrl = await window.api.getImage(APP.folderPath, row.filename, imageType, 'full');
-        if (fullUrl) openImageModal(fullUrl);
+      btn.addEventListener('click', () => {
+        openSpecimenImagePopup({
+          filename: row.filename,
+          fieldLabel: field,
+          fieldValue: value,
+          initialImageType: imageType,
+          initialZoomMode: tableImageZoomMode,
+        });
       });
     }));
   };
@@ -6881,7 +7261,8 @@ function showClusterValueGalleryPopup(field, value) {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     renderGrid();
   });
   const switchContainer = overlay.querySelector('#cluster-gallery-toggle');
@@ -6900,8 +7281,8 @@ function showDateFormatsReviewPopup(selectedField = '') {
   const analysis = field ? analyzeDateFormats(fieldValues) : { formats: [], dominantFormat: 'none' };
   const allItems = analysis.formats.flatMap(format => format.items);
   let activeIndex = allItems[0]?.index ?? -1;
-  let imageType = tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
   const refreshPopup = () => {
     popup.close();
     showDateFormatsReviewPopup(field);
@@ -6914,8 +7295,8 @@ function showDateFormatsReviewPopup(selectedField = '') {
       <div class="date-review-groups" id="date-format-review-list"></div>
       <div class="date-review-preview-pane">
         <div class="cluster-gallery-toggle image-viewer-toggle-row">
-          <div id="date-format-review-toggle"></div>
           <div id="date-format-review-zoom-toggle"></div>
+          <div id="date-format-review-toggle"></div>
         </div>
         <div class="focus-image-reference-meta">
           <div class="focus-image-reference-field">${escapeHtml(field || '')}</div>
@@ -6996,7 +7377,10 @@ function showDateFormatsReviewPopup(selectedField = '') {
       rowEl.addEventListener('click', (e) => {
         if (e.target.closest('[data-date-edit], textarea')) return;
         activeIndex = parseInt(rowEl.dataset.dateReviewIndex, 10);
-        renderGroups();
+        // Just toggle the .active class — re-rendering the whole list would
+        // cause a visible strobe of every row.
+        listEl.querySelectorAll('.date-review-row.active').forEach(r => r.classList.remove('active'));
+        rowEl.classList.add('active');
         loadPreview();
       });
     });
@@ -7025,16 +7409,20 @@ function showDateFormatsReviewPopup(selectedField = '') {
         const save = () => {
           const nextValue = input.value;
           const changedFromInitial = nextValue !== currentValue;
-          let rwBefore = null;
-          if (changedFromInitial) rwBefore = rewindCapture([spec.filename], [field]);
-
-          if (changedFromInitial) stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
-          else restoreFieldState(currentSpecState, field, initialSnapshot);
-          currentSpecState.last_touched = new Date().toISOString();
-          markSpecimenDirty(spec.filename);
-
-          if (changedFromInitial && rwBefore) {
-            rewindRecord('dateFormatEdit', 'Date Format Review', `"${field}" on ${getDisplayFilename(spec.filename)}`, rwBefore);
+          if (changedFromInitial) {
+            withRewind({
+              action: 'dateFormatEdit', label: 'Date Format Review',
+              summary: `"${field}" on ${getDisplayFilename(spec.filename)}`,
+              filenames: [spec.filename], fields: [field],
+            }, () => {
+              stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
+              currentSpecState.last_touched = new Date().toISOString();
+              markSpecimenDirty(spec.filename);
+            });
+          } else {
+            restoreFieldState(currentSpecState, field, initialSnapshot);
+            currentSpecState.last_touched = new Date().toISOString();
+            markSpecimenDirty(spec.filename);
           }
           scheduleSaveState(spec.filename);
           renderFocusSidebar(getFocusCategories());
@@ -7088,21 +7476,24 @@ function showDateFormatsReviewPopup(selectedField = '') {
     if (!valueEl || !imageEl) return;
     if (!field || !activeItem) {
       valueEl.innerHTML = '<span class="cell-empty-placeholder">Select a specimen</span>';
-      imageEl.innerHTML = '<div class="table-image-placeholder">Select a specimen</div>';
+      await swapPreviewImage(imageEl, null, { emptyHtml: '<div class="table-image-placeholder">Select a specimen</div>' });
       return;
     }
     valueEl.innerHTML = activeItem.value === ''
       ? '<span class="cell-empty-placeholder">(empty)</span>'
       : escapeHtml(String(activeItem.value));
-    imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
     const dataUrl = await window.api.getImage(APP.folderPath, activeItem.filename, imageType, 'full');
-    if (!imageEl.isConnected) return;
-    if (dataUrl) {
-      imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeItem.filename))}">`;
-      imageEl.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
+    await swapPreviewImage(imageEl, dataUrl, {
+      altText: getDisplayFilename(activeItem.filename),
+      onClick: () => openSpecimenImagePopup({
+        filename: activeItem.filename,
+        fieldLabel: field,
+        fieldValue: activeItem.value,
+        initialImageType: imageType,
+        initialZoomMode: zoomMode,
+      }),
+      emptyHtml: `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`,
+    });
     applyImageZoomMode('date-format-review-image', zoomMode);
   };
 
@@ -7110,7 +7501,8 @@ function showDateFormatsReviewPopup(selectedField = '') {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     loadPreview();
   });
   const switchContainer = popup.overlay.querySelector('#date-format-review-toggle');
@@ -7123,8 +7515,8 @@ function showDateFormatsReviewPopup(selectedField = '') {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('date-format-review-image', val);
   });
   const zoomSwitchContainer = popup.overlay.querySelector('#date-format-review-zoom-toggle');
@@ -7147,8 +7539,8 @@ function showDateViolationsReviewPopup(selectedField = '') {
     : { violations: { swapped: [], tooOld: [], future: [] }, totalViolations: 0 };
   const allItems = [...violations.swapped, ...violations.tooOld, ...violations.future];
   let activeIndex = allItems[0]?.index ?? -1;
-  let imageType = tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
   const refreshPopup = () => {
     popup.close();
     showDateViolationsReviewPopup(field);
@@ -7167,8 +7559,8 @@ function showDateViolationsReviewPopup(selectedField = '') {
       <div class="date-review-groups" id="date-violation-review-list"></div>
       <div class="date-review-preview-pane">
         <div class="cluster-gallery-toggle image-viewer-toggle-row">
-          <div id="date-violation-review-toggle"></div>
           <div id="date-violation-review-zoom-toggle"></div>
+          <div id="date-violation-review-toggle"></div>
         </div>
         <div class="focus-image-reference-meta">
           <div class="focus-image-reference-field">${escapeHtml(field || '')}</div>
@@ -7243,7 +7635,10 @@ function showDateViolationsReviewPopup(selectedField = '') {
       rowEl.addEventListener('click', (e) => {
         if (e.target.closest('[data-date-edit], textarea')) return;
         activeIndex = parseInt(rowEl.dataset.dateReviewIndex, 10);
-        renderGroups();
+        // Just toggle the .active class — re-rendering the whole list would
+        // cause a visible strobe of every row.
+        listEl.querySelectorAll('.date-review-row.active').forEach(r => r.classList.remove('active'));
+        rowEl.classList.add('active');
         loadPreview();
       });
     });
@@ -7272,16 +7667,20 @@ function showDateViolationsReviewPopup(selectedField = '') {
         const save = () => {
           const nextValue = input.value;
           const changedFromInitial = nextValue !== currentValue;
-          let rwBefore = null;
-          if (changedFromInitial) rwBefore = rewindCapture([spec.filename], [field]);
-
-          if (changedFromInitial) stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
-          else restoreFieldState(currentSpecState, field, initialSnapshot);
-          currentSpecState.last_touched = new Date().toISOString();
-          markSpecimenDirty(spec.filename);
-
-          if (changedFromInitial && rwBefore) {
-            rewindRecord('dateViolationEdit', 'Date Violation Review', `"${field}" on ${getDisplayFilename(spec.filename)}`, rwBefore);
+          if (changedFromInitial) {
+            withRewind({
+              action: 'dateViolationEdit', label: 'Date Violation Review',
+              summary: `"${field}" on ${getDisplayFilename(spec.filename)}`,
+              filenames: [spec.filename], fields: [field],
+            }, () => {
+              stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
+              currentSpecState.last_touched = new Date().toISOString();
+              markSpecimenDirty(spec.filename);
+            });
+          } else {
+            restoreFieldState(currentSpecState, field, initialSnapshot);
+            currentSpecState.last_touched = new Date().toISOString();
+            markSpecimenDirty(spec.filename);
           }
           scheduleSaveState(spec.filename);
           renderFocusSidebar(getFocusCategories());
@@ -7335,21 +7734,24 @@ function showDateViolationsReviewPopup(selectedField = '') {
     if (!valueEl || !imageEl) return;
     if (!field || !activeItem) {
       valueEl.innerHTML = '<span class="cell-empty-placeholder">Select a specimen</span>';
-      imageEl.innerHTML = '<div class="table-image-placeholder">Select a specimen</div>';
+      await swapPreviewImage(imageEl, null, { emptyHtml: '<div class="table-image-placeholder">Select a specimen</div>' });
       return;
     }
     valueEl.innerHTML = activeItem.value === ''
       ? '<span class="cell-empty-placeholder">(empty)</span>'
       : escapeHtml(String(activeItem.value));
-    imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
     const dataUrl = await window.api.getImage(APP.folderPath, activeItem.filename, imageType, 'full');
-    if (!imageEl.isConnected) return;
-    if (dataUrl) {
-      imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeItem.filename))}">`;
-      imageEl.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
+    await swapPreviewImage(imageEl, dataUrl, {
+      altText: getDisplayFilename(activeItem.filename),
+      onClick: () => openSpecimenImagePopup({
+        filename: activeItem.filename,
+        fieldLabel: field,
+        fieldValue: activeItem.value,
+        initialImageType: imageType,
+        initialZoomMode: zoomMode,
+      }),
+      emptyHtml: `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`,
+    });
     applyImageZoomMode('date-violation-review-image', zoomMode);
   };
 
@@ -7357,7 +7759,8 @@ function showDateViolationsReviewPopup(selectedField = '') {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     loadPreview();
   });
   const switchContainer = popup.overlay.querySelector('#date-violation-review-toggle');
@@ -7370,8 +7773,8 @@ function showDateViolationsReviewPopup(selectedField = '') {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('date-violation-review-image', val);
   });
   const zoomSwitchContainer = popup.overlay.querySelector('#date-violation-review-zoom-toggle');
@@ -7464,16 +7867,20 @@ function showCatalogPatternReviewPopup(selectedField = '') {
           const nextValue = input.value;
           const initialSnapshot = snapshotFieldState(currentSpecState, field);
           const changedFromInitial = nextValue !== item.value;
-          let rwBefore = null;
-          if (changedFromInitial) rwBefore = rewindCapture([spec.filename], [field]);
-
-          if (changedFromInitial) stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
-          else restoreFieldState(currentSpecState, field, initialSnapshot);
-          currentSpecState.last_touched = new Date().toISOString();
-          markSpecimenDirty(spec.filename);
-
-          if (changedFromInitial && rwBefore) {
-            rewindRecord('catalogPatternEdit', 'Catalog Pattern Review', `"${field}" on ${getDisplayFilename(spec.filename)}`, rwBefore);
+          if (changedFromInitial) {
+            withRewind({
+              action: 'catalogPatternEdit', label: 'Catalog Pattern Review',
+              summary: `"${field}" on ${getDisplayFilename(spec.filename)}`,
+              filenames: [spec.filename], fields: [field],
+            }, () => {
+              stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
+              currentSpecState.last_touched = new Date().toISOString();
+              markSpecimenDirty(spec.filename);
+            });
+          } else {
+            restoreFieldState(currentSpecState, field, initialSnapshot);
+            currentSpecState.last_touched = new Date().toISOString();
+            markSpecimenDirty(spec.filename);
           }
           scheduleSaveState(spec.filename);
           renderFocusSidebar(getFocusCategories());
@@ -7617,16 +8024,20 @@ function showCatalogPatternReviewPopup(selectedField = '') {
           `Stage <strong>${pattern.count}</strong> specimen${pattern.count !== 1 ? 's' : ''} in the <strong>${escapeHtml(pattern.pattern)}</strong> pattern bin as <strong>Unconfirmed</strong> for <strong>${escapeHtml(field)}</strong>? This includes <strong>${changedCount}</strong> edited value${changedCount !== 1 ? 's' : ''}.`,
           () => {
             const affectedFilenames = pattern.items.map(item => item.filename);
-            const _rwBefore = rewindCapture(affectedFilenames, [field]);
-            for (const item of pattern.items) {
-              const spec = APP.specimens[item.index];
-              if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-              const st = APP.state.specimens[spec.filename];
-              stageFieldAsUnconfirmed(st, field, getDraftValue(item));
-              st.last_touched = new Date().toISOString();
-              autoConfirmCategories(spec.filename);
-            }
-            rewindRecord('catalogPatternReview', 'Catalog Pattern Review', `${pattern.count} specimen${pattern.count !== 1 ? 's' : ''} staged in "${field}"`, _rwBefore);
+            withRewind({
+              action: 'catalogPatternReview', label: 'Catalog Pattern Review',
+              summary: `${pattern.count} specimen${pattern.count !== 1 ? 's' : ''} staged in "${field}"`,
+              filenames: affectedFilenames, fields: [field],
+            }, () => {
+              for (const item of pattern.items) {
+                const spec = APP.specimens[item.index];
+                if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+                const st = APP.state.specimens[spec.filename];
+                stageFieldAsUnconfirmed(st, field, getDraftValue(item));
+                st.last_touched = new Date().toISOString();
+                autoConfirmCategories(spec.filename);
+              }
+            });
             scheduleSaveState(affectedFilenames);
             renderFocusSidebar(getFocusCategories());
             renderFocusMain();
@@ -7678,28 +8089,6 @@ function getOcrDisagreementCountsByField(fields = getAvailableProjectFields()) {
   return counts;
 }
 
-function getOcrPopupFieldSelectorHtml(controlId, selectedField, fields, mismatchCounts) {
-  const selectedHasWarnings = !!(selectedField && mismatchCounts[selectedField] > 0);
-  return `
-    <div class="focus-popup-header-controls">
-      <button class="btn-sm" type="button" data-field-nav="prev" title="Previous field">&#8592;</button>
-      <button class="btn-sm" type="button" data-field-nav="next" title="Next field">&#8594;</button>
-      <label class="focus-popup-field-label ocr-popup-field-label">
-        <span>Field</span>
-        ${selectedHasWarnings ? `<span class="ocr-popup-field-warning" title="This field contains OCR disagreements">${getOcrWarningIconSvg()}</span>` : ''}
-        <select id="${controlId}" class="focus-popup-field-select">
-          <option value="">Select field...</option>
-          ${fields.map(itemField => {
-            const hasWarnings = (mismatchCounts[itemField] || 0) > 0;
-            const label = `${hasWarnings ? '⚠ ' : ''}${itemField}`;
-            return `<option value="${escapeAttr(itemField)}" ${itemField === selectedField ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-          }).join('')}
-        </select>
-      </label>
-    </div>
-  `;
-}
-
 function showOcrComparisonPopup(selectedField = '', options = {}) {
   const field = selectedField;
   const fields = getAvailableProjectFields();
@@ -7722,13 +8111,13 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
   const mismatchRows = rows.filter(row => row.mismatchCount > 0);
   const noMismatchRows = rows.filter(row => row.mismatchCount === 0);
   let activeIndex = options.activeIndex ?? -1;
-  let imageType = options.imageType || tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = options.imageType || getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
   let showNoMismatchRows = !!options.showNoMismatchRows;
 
   const popup = createFocusToolPopup({
     title: 'OCR Comparison',
-    headerRightHtml: getOcrPopupFieldSelectorHtml('ocr-review-field', field, fields, mismatchCountsByField),
+    headerRightHtml: getPopupFieldSelectorHtml('ocr-review-field', field, { fields, prevNext: true, includeEmpty: true, mismatchCounts: mismatchCountsByField }),
     intro: field
       ? `Review <strong>${escapeHtml(field)}</strong> against OCR text in a dedicated workspace. Purple highlights mark tokens that do not appear in the OCR output. Click a reviewed value to edit it as <strong>Unconfirmed</strong>, and use the specimen flag control for follow-up.`
       : 'Choose a field to review OCR disagreements. Purple highlights will mark tokens that do not appear in the OCR output.',
@@ -7746,8 +8135,8 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
       </div>
       <div class="ocr-review-right">
         <div class="ocr-review-toggle image-viewer-toggle-row">
-          <div id="ocr-review-toggle"></div>
           <div id="ocr-review-zoom-toggle"></div>
+          <div id="ocr-review-toggle"></div>
         </div>
         <div class="ocr-review-image image-fit-mode" id="ocr-review-image"><div class="table-image-placeholder">${field ? 'Loading...' : 'Select a field'}</div></div>
         <div class="ocr-review-ocr">
@@ -7791,8 +8180,6 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
   if (activeIndex < 0 || !rows.some(row => row.index === activeIndex)) {
     activeIndex = (mismatchRows[0] || rows[0])?.index ?? -1;
   }
-  let lastLoadedImageUrl = '';
-
   const updateCount = () => {
     const flaggedRows = rows.filter(row => !!APP.state.specimens[row.filename]?.flagged);
     const countEl = popup.overlay.querySelector('#ocr-review-count');
@@ -7920,18 +8307,18 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
       ocrEl.textContent = cached?.ocr || '(No OCR text available for this specimen)';
     }
     if (imageEl) {
-      imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
       const dataUrl = await window.api.getImage(APP.folderPath, activeRow.filename, imageType, 'full');
       if (!imageEl.isConnected) return;
-      lastLoadedImageUrl = dataUrl || '';
-      if (dataUrl) {
-        imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeRow.filename))}">`;
-        imageEl.querySelector('img')?.addEventListener('click', () => {
-          if (lastLoadedImageUrl) openImageModal(lastLoadedImageUrl);
-        });
-      } else {
-        imageEl.innerHTML = '<div class="table-image-placeholder">No image</div>';
-      }
+      await swapPreviewImage(imageEl, dataUrl, {
+        altText: getDisplayFilename(activeRow.filename),
+        onClick: () => openSpecimenImagePopup({
+          filename: activeRow.filename,
+          fieldLabel: field,
+          fieldValue: activeRow.currentValue ?? '',
+          initialImageType: imageType,
+          initialZoomMode: zoomMode,
+        }),
+      });
       applyImageZoomMode('ocr-review-image', zoomMode);
     }
   };
@@ -7981,7 +8368,8 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     loadActivePreview();
   });
   const switchContainer = popup.overlay.querySelector('#ocr-review-toggle');
@@ -7994,8 +8382,8 @@ function showOcrComparisonPopup(selectedField = '', options = {}) {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('ocr-review-image', val);
   });
   const zoomSwitchContainer = popup.overlay.querySelector('#ocr-review-zoom-toggle');
@@ -8026,8 +8414,8 @@ function showElevationDiscrepancyPopup(selectedField = '') {
   const items = analysis.items;
   const groups = analysis.groups;
   let activeIndex = items[0]?.index ?? -1;
-  let imageType = tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
   const refreshPopup = () => {
     popup.close();
     showElevationDiscrepancyPopup(field);
@@ -8075,8 +8463,8 @@ function showElevationDiscrepancyPopup(selectedField = '') {
           </div>
         </div>
         <div class="cluster-gallery-toggle image-viewer-toggle-row">
-          <div id="elevation-review-toggle"></div>
           <div id="elevation-review-zoom-toggle"></div>
+          <div id="elevation-review-toggle"></div>
         </div>
         <div class="wfo-reference-images image-fit-mode" id="elevation-review-image"><div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div></div>
       </div>
@@ -8147,16 +8535,20 @@ function showElevationDiscrepancyPopup(selectedField = '') {
     const save = () => {
       const nextValue = input.value;
       const changedFromInitial = nextValue !== currentValue;
-      let rwBefore = null;
-      if (changedFromInitial) rwBefore = rewindCapture([spec.filename], [field]);
-
-      if (changedFromInitial) stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
-      else restoreFieldState(currentSpecState, field, initialSnapshot);
-      currentSpecState.last_touched = new Date().toISOString();
-      markSpecimenDirty(spec.filename);
-
-      if (changedFromInitial && rwBefore) {
-        rewindRecord('elevationReviewEdit', 'Elevation Review', `"${field}" on ${getDisplayFilename(spec.filename)}`, rwBefore);
+      if (changedFromInitial) {
+        withRewind({
+          action: 'elevationReviewEdit', label: 'Elevation Review',
+          summary: `"${field}" on ${getDisplayFilename(spec.filename)}`,
+          filenames: [spec.filename], fields: [field],
+        }, () => {
+          stageFieldAsUnconfirmed(currentSpecState, field, nextValue);
+          currentSpecState.last_touched = new Date().toISOString();
+          markSpecimenDirty(spec.filename);
+        });
+      } else {
+        restoreFieldState(currentSpecState, field, initialSnapshot);
+        currentSpecState.last_touched = new Date().toISOString();
+        markSpecimenDirty(spec.filename);
       }
       scheduleSaveState(spec.filename);
       renderFocusSidebar(getFocusCategories());
@@ -8263,7 +8655,9 @@ function showElevationDiscrepancyPopup(selectedField = '') {
     if (!field || !activeItem) {
       valueEl.innerHTML = '<span class="cell-empty-placeholder">Select a specimen</span>';
       detailEl.textContent = field ? 'Select a specimen' : 'Select a field';
-      imageEl.innerHTML = `<div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div>`;
+      await swapPreviewImage(imageEl, null, {
+        emptyHtml: `<div class="table-image-placeholder">${field ? 'Select a specimen' : 'Select a field'}</div>`,
+      });
       if (cop90MEl) cop90MEl.textContent = '—';
       if (cop90FtEl) cop90FtEl.textContent = '—';
       if (metersEl) metersEl.textContent = '';
@@ -8287,15 +8681,18 @@ function showElevationDiscrepancyPopup(selectedField = '') {
       cop90FtEl.textContent = activeItem.hasCop90 ? (activeItem.cop90 * 3.28084).toFixed(1) : '—';
     }
 
-    imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
     const dataUrl = await window.api.getImage(APP.folderPath, activeItem.filename, imageType, 'full');
-    if (!imageEl.isConnected) return;
-    if (dataUrl) {
-      imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeItem.filename))}">`;
-      imageEl.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
+    await swapPreviewImage(imageEl, dataUrl, {
+      altText: getDisplayFilename(activeItem.filename),
+      onClick: () => openSpecimenImagePopup({
+        filename: activeItem.filename,
+        fieldLabel: field,
+        fieldValue: activeItem.valueLabel,
+        initialImageType: imageType,
+        initialZoomMode: zoomMode,
+      }),
+      emptyHtml: `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`,
+    });
     applyImageZoomMode('elevation-review-image', zoomMode);
   };
 
@@ -8303,7 +8700,8 @@ function showElevationDiscrepancyPopup(selectedField = '') {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' }
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     loadPreview();
   });
   const switchContainer = popup.overlay.querySelector('#elevation-review-toggle');
@@ -8316,8 +8714,8 @@ function showElevationDiscrepancyPopup(selectedField = '') {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' }
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('elevation-review-image', val);
   });
   const zoomSwitchContainer = popup.overlay.querySelector('#elevation-review-zoom-toggle');
@@ -8976,16 +9374,12 @@ function showCollectorNamePopup(selectedField = focusField) {
     const sepLabel = oldSep.trim() || ',';
     const formatNameLines = (names, cls) => names.map(n => `<div class="${cls}">${escapeHtml(n)}</div>`).join('');
 
-    const npPhotoBtnHtml = includePhotoButton
-      ? `<button type="button" class="btn-icon popup-quicktools-photo wfo-photo-btn np-photo-btn" data-file="${escapeAttr(r.filename)}" title="Open specimen image reference"><img src="icons/image.svg" alt="" aria-hidden="true"></button>`
-      : '';
     const npQuickTools = renderPopupQuickTools(r, {
       tool: 'collectors',
       statusField: field,
       includePhoto: includePhotoButton,
       includeFlag: includeFlagButton,
       includeStatus: !!field,
-      photoButtonHtml: npPhotoBtnHtml,
     });
     return `
       <div class="name-parser-row ${r.hasChange ? '' : 'no-change'} ${rowClass}">
@@ -8997,69 +9391,6 @@ function showCollectorNamePopup(selectedField = focusField) {
         ${oldNames.length > 1 ? `<span class="np-sep-hint">joined by "${escapeHtml(sepLabel)}"</span>` : ''}
       </div>
     `;
-  }
-
-  function showNameParserSpecimenReferencePopup(row) {
-    const switchId = `np-ref-switch-${Date.now()}`;
-    let imageType = tableImageType;
-
-    const overlay = document.createElement('div');
-    overlay.className = 'image-modal-overlay';
-    overlay.style.cursor = 'default';
-    overlay.innerHTML = `
-      <div class="wfo-reference-popup np-reference-popup" onclick="event.stopPropagation()">
-        <div class="name-parser-header">
-          <span>${escapeHtml(getDisplayFilename(row.filename))}</span>
-          ${popupCloseBtnHtml('np-ref-close')}
-        </div>
-        <div class="wfo-reference-toggle" id="np-reference-toggle"></div>
-        <div class="wfo-reference-preview">
-          ${renderNameParserRow(row, {
-            includeCheckbox: false,
-            includeFlagButton: false,
-            includePhotoButton: false,
-            rowClass: 'wfo-table-row-readonly',
-          })}
-        </div>
-        <div class="wfo-reference-images" id="np-reference-images">
-          <div class="table-image-placeholder">Loading...</div>
-        </div>
-      </div>
-    `;
-
-    const close = () => overlay.remove();
-    overlay.addEventListener('click', close);
-    document.body.appendChild(overlay);
-    document.getElementById('np-ref-close')?.addEventListener('click', close);
-
-    const sw = createSlideSwitch(switchId, [
-      { value: 'collage', label: 'Collage' },
-      { value: 'original', label: 'Original' }
-    ], imageType, (val) => {
-      imageType = val;
-      loadNameParserReferenceImage();
-    });
-    const switchContainer = document.getElementById('np-reference-toggle');
-    if (switchContainer) {
-      switchContainer.innerHTML = sw.html;
-      sw.setup();
-    }
-
-    async function loadNameParserReferenceImage() {
-      const container = document.getElementById('np-reference-images');
-      if (!container) return;
-      container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
-      const dataUrl = await window.api.getImage(APP.folderPath, row.filename, imageType, 'full');
-      if (!container.isConnected) return;
-      if (dataUrl) {
-        container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(row.filename))}">`;
-        container.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-      } else {
-        container.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-      }
-    }
-
-    loadNameParserReferenceImage();
   }
 
   const overlay = document.createElement('div');
@@ -9148,14 +9479,6 @@ function showCollectorNamePopup(selectedField = focusField) {
       });
     });
     wirePopupQuickTools(listEl, { closeFn: () => overlay.remove(), onFlagRefresh: renderList });
-    listEl.querySelectorAll('.np-photo-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const row = preview.find(item => item.filename === btn.dataset.file);
-        if (row) showNameParserSpecimenReferencePopup(row);
-      });
-    });
   }
 
   renderList();
@@ -9201,18 +9524,20 @@ function showCollectorNamePopup(selectedField = focusField) {
     if (accepted.length === 0) { overlay.remove(); return; }
 
     const affectedFilenames = accepted.map(r => APP.specimens[r.index].filename);
-    const _rwBefore = rewindCapture(affectedFilenames, [field]);
-
-    for (const r of accepted) {
-      const spec = APP.specimens[r.index];
-      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields)
-        APP.state.specimens[spec.filename].unconfirmed_fields = {};
-      APP.state.specimens[spec.filename].unconfirmed_fields[field] = r.newVal;
-      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-    }
-
-    rewindRecord('nameParser', 'Name Parser', `${currentFormat} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`, _rwBefore);
+    withRewind({
+      action: 'nameParser', label: 'Name Parser',
+      summary: `${currentFormat} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`,
+      filenames: affectedFilenames, fields: [field],
+    }, () => {
+      for (const r of accepted) {
+        const spec = APP.specimens[r.index];
+        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+        if (!APP.state.specimens[spec.filename].unconfirmed_fields)
+          APP.state.specimens[spec.filename].unconfirmed_fields = {};
+        APP.state.specimens[spec.filename].unconfirmed_fields[field] = r.newVal;
+        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+      }
+    });
     scheduleSaveState(affectedFilenames);
     overlay.remove();
     renderFocusSidebar(getFocusCategories());
@@ -9247,17 +9572,19 @@ function applyStandardizeTool(tool) {
 
   const affectedFilenames = [...new Set(preview.map(p => APP.specimens[p.index].filename))];
   const affectedFields = [...new Set(preview.map(p => p.field))];
-  const _rwBefore = rewindCapture(affectedFilenames, affectedFields);
-
-  for (const item of preview) {
-    const spec = APP.specimens[item.index];
-    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-    APP.state.specimens[spec.filename].unconfirmed_fields[item.field] = item.newVal;
-    APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-  }
-
-  rewindRecord('standardize', 'Standardize', `${tool.label} (${preview.length} change${preview.length !== 1 ? 's' : ''})`, _rwBefore);
+  withRewind({
+    action: 'standardize', label: 'Standardize',
+    summary: `${tool.label} (${preview.length} change${preview.length !== 1 ? 's' : ''})`,
+    filenames: affectedFilenames, fields: affectedFields,
+  }, () => {
+    for (const item of preview) {
+      const spec = APP.specimens[item.index];
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
+      APP.state.specimens[spec.filename].unconfirmed_fields[item.field] = item.newVal;
+      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+    }
+  });
   scheduleSaveState(affectedFilenames);
   return preview.length;
 }
@@ -9296,9 +9623,8 @@ function showVoucherVisionBatchPopup(initialChoices = null) {
       value: initial?.value ?? '',
     }];
   }));
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
   overlay.innerHTML = `
     <div class="vv-batch-popup" onclick="event.stopPropagation()">
       <div class="name-parser-header">
@@ -9335,9 +9661,7 @@ function showVoucherVisionBatchPopup(initialChoices = null) {
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
+  const close = shell.close;
 
   const updateFieldUi = (field) => {
     const choice = choices[field];
@@ -9470,41 +9794,44 @@ async function applyVoucherVisionBatchChoices(choices) {
 
   await ensureAllSpecimensCached();
   const affectedFilenames = APP.specimens.map(spec => spec.filename);
-  const _rwBefore = rewindCapture(affectedFilenames, fields, { categories_confirmed: true });
-
-  for (const spec of APP.specimens) {
-    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    const specState = APP.state.specimens[spec.filename];
-    if (!specState.accepted_fields) specState.accepted_fields = {};
-    if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
-
-    for (const field of fields) {
-      const aiValueRaw = tableDataCache[spec.filename]?.formatted_json?.[field];
-      const aiValue = aiValueRaw !== undefined ? String(aiValueRaw) : '';
-      const choice = choices[field];
-      const nextValue = choice.mode === 'keep' ? aiValue : choice.value;
-      const source = choice.mode === 'keep'
-        ? (nextValue === '' ? 'confirmed_empty' : 'ai')
-        : deriveAcceptedSource(aiValue, nextValue);
-
-      specState.accepted_fields[field] = {
-        value: nextValue,
-        source,
-        batch_accepted_vouchervision: true,
-      };
-      delete specState.unconfirmed_fields[field];
-    }
-
-    specState.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-  }
-
   const keptFields = fields.filter(field => choices[field].mode === 'keep');
   const replacedFields = fields.filter(field => choices[field].mode === 'replace');
   const summaryParts = [];
   if (keptFields.length > 0) summaryParts.push(`kept VV for ${keptFields.length} field${keptFields.length !== 1 ? 's' : ''}`);
   if (replacedFields.length > 0) summaryParts.push(`replaced ${replacedFields.length} field${replacedFields.length !== 1 ? 's' : ''}`);
-  rewindRecord('batchAcceptVoucherVision', 'Batch-Accept VoucherVision Content', `${summaryParts.join(', ')} across ${APP.specimens.length} specimen${APP.specimens.length !== 1 ? 's' : ''}`, _rwBefore);
+
+  withRewind({
+    action: 'batchAcceptVoucherVision', label: 'Batch-Accept VoucherVision Content',
+    summary: `${summaryParts.join(', ')} across ${APP.specimens.length} specimen${APP.specimens.length !== 1 ? 's' : ''}`,
+    filenames: affectedFilenames, fields, opts: { categories_confirmed: true },
+  }, () => {
+    for (const spec of APP.specimens) {
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      const specState = APP.state.specimens[spec.filename];
+      if (!specState.accepted_fields) specState.accepted_fields = {};
+      if (!specState.unconfirmed_fields) specState.unconfirmed_fields = {};
+
+      for (const field of fields) {
+        const aiValueRaw = tableDataCache[spec.filename]?.formatted_json?.[field];
+        const aiValue = aiValueRaw !== undefined ? String(aiValueRaw) : '';
+        const choice = choices[field];
+        const nextValue = choice.mode === 'keep' ? aiValue : choice.value;
+        const source = choice.mode === 'keep'
+          ? (nextValue === '' ? 'confirmed_empty' : 'ai')
+          : deriveAcceptedSource(aiValue, nextValue);
+
+        specState.accepted_fields[field] = {
+          value: nextValue,
+          source,
+          batch_accepted_vouchervision: true,
+        };
+        delete specState.unconfirmed_fields[field];
+      }
+
+      specState.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+    }
+  });
   scheduleSaveState(affectedFilenames);
   renderFocusSidebar(getFocusCategories());
   renderFocusMain();
@@ -9597,8 +9924,8 @@ async function showNullDefaultBatchPopup(initialChoices = null) {
 
   // Preview state
   let activeFilename = null;
-  let imageType = tableImageType;
-  let zoomMode = tableImageZoomMode;
+  let imageType = getGlobalImageType();
+  let zoomMode = getGlobalImageZoomMode();
 
   const buildCardsHtml = () => fields.map(field => {
     const vals = defaults[field];
@@ -9661,8 +9988,8 @@ async function showNullDefaultBatchPopup(initialChoices = null) {
         <div class="null-default-batch-cards" id="null-default-batch-list">${buildCardsHtml()}</div>
         <div class="null-default-batch-preview">
           <div class="cluster-gallery-toggle null-default-batch-toggle-row">
-            <div id="null-default-batch-toggle"></div>
             <div id="null-default-batch-zoom-toggle"></div>
+            <div id="null-default-batch-toggle"></div>
           </div>
           <div class="focus-image-reference-meta">
             <div class="focus-image-reference-field" id="null-default-batch-meta">Select a specimen row</div>
@@ -9688,7 +10015,8 @@ async function showNullDefaultBatchPopup(initialChoices = null) {
     { value: 'collage', label: 'Collage' },
     { value: 'original', label: 'Original' },
   ], imageType, (val) => {
-    imageType = val;
+    setGlobalImageType(val);
+    imageType = getGlobalImageType();
     loadPreview();
   });
   const switchContainer = overlay.querySelector('#null-default-batch-toggle');
@@ -9702,8 +10030,8 @@ async function showNullDefaultBatchPopup(initialChoices = null) {
     { value: 'fit', label: 'Fit' },
     { value: 'zoom', label: 'Zoom' },
   ], zoomMode, (val) => {
-    zoomMode = val;
-    tableImageZoomMode = val;
+    setGlobalImageZoomMode(val);
+    zoomMode = getGlobalImageZoomMode();
     applyImageZoomMode('null-default-batch-image', val);
   });
   const zoomSwitchContainer = overlay.querySelector('#null-default-batch-zoom-toggle');
@@ -9717,20 +10045,23 @@ async function showNullDefaultBatchPopup(initialChoices = null) {
     const metaEl = overlay.querySelector('#null-default-batch-meta');
     if (!imageEl) return;
     if (!activeFilename) {
-      imageEl.innerHTML = '<div class="table-image-placeholder">Select a specimen from a card to preview its image</div>';
       if (metaEl) metaEl.textContent = 'Select a specimen row';
+      await swapPreviewImage(imageEl, null, {
+        emptyHtml: '<div class="table-image-placeholder">Select a specimen from a card to preview its image</div>',
+      });
       return;
     }
     if (metaEl) metaEl.textContent = getDisplayFilename(activeFilename);
-    imageEl.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
     const dataUrl = await window.api.getImage(APP.folderPath, activeFilename, imageType, 'full');
-    if (!imageEl.isConnected) return;
-    if (dataUrl) {
-      imageEl.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(activeFilename))}">`;
-      imageEl.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      imageEl.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
+    await swapPreviewImage(imageEl, dataUrl, {
+      altText: getDisplayFilename(activeFilename),
+      onClick: () => openSpecimenImagePopup({
+        filename: activeFilename,
+        initialImageType: imageType,
+        initialZoomMode: zoomMode,
+      }),
+      emptyHtml: `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`,
+    });
     applyImageZoomMode('null-default-batch-image', zoomMode);
   };
 
@@ -9846,24 +10177,21 @@ async function applyNullDefaultBatchChoices(choices, excludedByField = {}) {
   }
 
   const affectedFilenames = work.map(w => w.filename);
-  const _rwBefore = rewindCapture(affectedFilenames, applyFields);
-
-  for (const { filename, fields } of work) {
-    if (!APP.state.specimens[filename]) initSpecimenState(filename);
-    const st = APP.state.specimens[filename];
-    for (const field of fields) {
-      stageFieldAsUnconfirmed(st, field, choices[field].value);
+  withRewind({
+    action: 'batchNullDefaults', label: 'Batch-Apply Null Defaults',
+    summary: `staged ${applyFields.length} field${applyFields.length !== 1 ? 's' : ''} across ${work.length} specimen${work.length !== 1 ? 's' : ''}`,
+    filenames: affectedFilenames, fields: applyFields,
+  }, () => {
+    for (const { filename, fields } of work) {
+      if (!APP.state.specimens[filename]) initSpecimenState(filename);
+      const st = APP.state.specimens[filename];
+      for (const field of fields) {
+        stageFieldAsUnconfirmed(st, field, choices[field].value);
+      }
+      st.last_touched = new Date().toISOString();
+      markSpecimenDirty(filename);
     }
-    st.last_touched = new Date().toISOString();
-    markSpecimenDirty(filename);
-  }
-
-  rewindRecord(
-    'batchNullDefaults',
-    'Batch-Apply Null Defaults',
-    `staged ${applyFields.length} field${applyFields.length !== 1 ? 's' : ''} across ${work.length} specimen${work.length !== 1 ? 's' : ''}`,
-    _rwBefore
-  );
+  });
 
   scheduleSaveState(affectedFilenames);
   renderFocusSidebar(getFocusCategories());
@@ -10352,18 +10680,22 @@ function wireTagIconButtons(container, onRefresh = () => {}) {
       const st = APP.state.specimens[filename];
       if (!st.flagged) return;
 
-      const _rwBefore = rewindCapture([filename], [], { flagged: true });
-      if (specimenHasTagForTool(filename, tool)) {
-        removeTagFromSpecimen(filename, tool);
-        if ((st.flag_tags || []).length === 0) {
-          st.flagged = false;
-          st.flag_note = '';
+      withRewind({
+        action: 'tagFlag', label: 'Tag Flag',
+        summary: `Tag ${FLAG_TOOL_LABELS[tool] || tool} on ${getDisplayFilename(filename)}`,
+        filenames: [filename], opts: { flagged: true },
+      }, () => {
+        if (specimenHasTagForTool(filename, tool)) {
+          removeTagFromSpecimen(filename, tool);
+          if ((st.flag_tags || []).length === 0) {
+            st.flagged = false;
+            st.flag_note = '';
+          }
+        } else {
+          addTagToSpecimen(filename, tool);
         }
-      } else {
-        addTagToSpecimen(filename, tool);
-      }
-      st.last_touched = new Date().toISOString();
-      rewindRecord('tagFlag', 'Tag Flag', `Tag ${FLAG_TOOL_LABELS[tool] || tool} on ${getDisplayFilename(filename)}`, _rwBefore);
+        st.last_touched = new Date().toISOString();
+      });
       scheduleSaveState(filename);
       updateNavBar();
       onRefresh();
@@ -10395,7 +10727,7 @@ function wirePopupImageButtons(container) {
 //   # index | image popup | goto form | flag | status square
 // The goto button carries data-popup-goto-index and is wired by
 // wirePopupGotoButtons. The photo button carries data-popup-image-file and is
-// picked up by the existing wirePopupImageButtons. The flag button reuses
+// picked up by wirePopupImageButtons. The flag button reuses
 // renderPopupFlagButton and is picked up by wirePopupFlagButtons.
 function renderPopupQuickTools(item, options = {}) {
   const {
@@ -10406,15 +10738,11 @@ function renderPopupQuickTools(item, options = {}) {
     includePhoto = true,
     includeFlag = true,
     includeStatus = true,
-    // Optional override: if provided, this HTML replaces the default image-popup
-    // button. Used by tools that open a specialized reference popup instead of
-    // the generic specimen image (e.g. WFO Backbone taxonomy comparison).
-    photoButtonHtml = null,
   } = options;
 
   const indexHtml = `<span class="popup-quicktools-index">#${item.index + 1}</span>`;
 
-  const photoHtml = !includePhoto ? '' : (photoButtonHtml !== null ? photoButtonHtml : `
+  const photoHtml = !includePhoto ? '' : `
     <button type="button"
             class="btn-icon popup-quicktools-photo"
             data-popup-image-file="${escapeAttr(item.filename)}"
@@ -10423,7 +10751,7 @@ function renderPopupQuickTools(item, options = {}) {
             title="Open specimen image reference">
       <img src="icons/image.svg" alt="" aria-hidden="true">
     </button>
-  `);
+  `;
 
   const gotoHtml = `
     <button type="button"
@@ -10488,16 +10816,12 @@ function renderWfoPopupRow(row, selectedKeys, options = {}) {
     ? `<span class="wfo-col-check"><input type="checkbox" data-file="${escapeAttr(row.filename)}" ${checked ? 'checked' : ''} ${!isSelectable ? 'disabled' : ''}></span>`
     : '<span class="wfo-col-check"></span>';
 
-  const wfoPhotoBtnHtml = includePhotoButton
-    ? `<button type="button" class="btn-icon popup-quicktools-photo wfo-photo-btn" data-file="${escapeAttr(row.filename)}" title="Open specimen image reference"><img src="icons/image.svg" alt="" aria-hidden="true"></button>`
-    : '';
   const quickTools = renderPopupQuickTools(row, {
     tool: 'wfo',
     statusField,
     includePhoto: includePhotoButton,
     includeFlag: includeFlagButton,
     includeStatus: includeStatusSquare,
-    photoButtonHtml: wfoPhotoBtnHtml,
   });
 
   const noChangeClass = (!editableNoMatch && !row.hasChange) ? 'no-change' : '';
@@ -10520,99 +10844,6 @@ function renderWfoPopupRow(row, selectedKeys, options = {}) {
       }).join('')}
     </div>
   `;
-}
-
-function showWfoSpecimenReferencePopup(row, selectedKeys, options = {}) {
-  const switchId = `wfo-ref-switch-${Date.now()}`;
-  let imageType = tableImageType;
-  const gridTemplate = `146px 26px 110px 60px ${selectedKeys.map(() => 'minmax(150px, 1fr)').join(' ')}`;
-  const {
-    editableNoMatch = false,
-    getDraftValue = () => '',
-    setDraftValue = () => {},
-    onClose = () => {},
-  } = options;
-
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-  overlay.innerHTML = `
-    <div class="wfo-reference-popup" onclick="event.stopPropagation()">
-      <div class="name-parser-header">
-        <span>${escapeHtml(getDisplayFilename(row.filename))}</span>
-        ${popupCloseBtnHtml('wfo-ref-close')}
-      </div>
-      <div class="wfo-reference-toggle" id="wfo-reference-toggle"></div>
-      <div class="wfo-reference-preview">
-        <div class="wfo-table-header wfo-reference-header" style="grid-template-columns:${gridTemplate}">
-          <span class="popup-quicktools-header"></span>
-          <span class="wfo-col-check"></span>
-          <span class="wfo-col-file">Specimen</span>
-          <span class="wfo-col-match">WFO</span>
-          ${selectedKeys.map(key => `
-            <span class="wfo-col-field-head">
-              <span>${escapeHtml(key.label)}</span>
-              <span class="wfo-col-field-name">${escapeHtml(row.cells.find(cell => cell.id === key.id)?.field || '')}</span>
-            </span>
-          `).join('')}
-        </div>
-        ${renderWfoPopupRow(row, selectedKeys, {
-          includeCheckbox: false,
-          includeFlagButton: false,
-          includePhotoButton: false,
-          gridTemplate,
-          rowClass: 'wfo-table-row-readonly',
-          editableNoMatch,
-          getDraftValue,
-          inputContext: 'reference'
-        })}
-      </div>
-      <div class="wfo-reference-images" id="wfo-reference-images">
-        <div class="table-image-placeholder">Loading...</div>
-      </div>
-    </div>
-  `;
-
-  const close = () => {
-    overlay.remove();
-    onClose();
-  };
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
-  document.getElementById('wfo-ref-close')?.addEventListener('click', close);
-  overlay.querySelectorAll('.wfo-inline-input').forEach(input => {
-    input.addEventListener('input', () => {
-      setDraftValue(input.dataset.file, input.dataset.key, input.value);
-    });
-  });
-
-  const sw = createSlideSwitch(switchId, [
-    { value: 'collage', label: 'Collage' },
-    { value: 'original', label: 'Original' }
-  ], imageType, (val) => {
-    imageType = val;
-    loadWfoReferenceImage();
-  });
-  const switchContainer = document.getElementById('wfo-reference-toggle');
-  if (switchContainer) {
-    switchContainer.innerHTML = sw.html;
-    sw.setup();
-  }
-
-  async function loadWfoReferenceImage() {
-    const container = document.getElementById('wfo-reference-images');
-    if (!container) return;
-    container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
-    const dataUrl = await window.api.getImage(APP.folderPath, row.filename, imageType, 'full');
-    if (!container.isConnected) return;
-    if (dataUrl) {
-      container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(row.filename))}">`;
-    } else {
-      container.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
-  }
-
-  loadWfoReferenceImage();
 }
 
 function showWfoBackbonePopup(fieldMap, options = {}) {
@@ -10769,23 +11000,6 @@ function showWfoBackbonePopup(fieldMap, options = {}) {
       showNoChangeRows = !showNoChangeRows;
       renderList();
     });
-    listEl.querySelectorAll('.wfo-photo-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const rowData = rows.find(item => item.filename === btn.dataset.file);
-        if (rowData) {
-          showWfoSpecimenReferencePopup(rowData, selectedKeys, {
-            editableNoMatch: rowData.matchGroup === 'no_match',
-            getDraftValue: (cell) => getDraftValue(rowData, cell),
-            setDraftValue,
-            onClose: () => {
-              if (matchFilter === 'no_match') renderList();
-            }
-          });
-        }
-      });
-    });
   }
 
   renderList();
@@ -10799,22 +11013,26 @@ function showWfoBackbonePopup(fieldMap, options = {}) {
 
     const affectedFilenames = accepted.map(row => APP.specimens[row.index].filename);
     const affectedFields = [...new Set(accepted.flatMap(row => row.cells.map(cell => cell.field)))];
-    const _rwBefore = rewindCapture(affectedFilenames, affectedFields);
-
-    for (const row of accepted) {
-      const spec = APP.specimens[row.index];
-      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-
-      row.cells.forEach(cell => {
-        stageFieldAsUnconfirmed(APP.state.specimens[spec.filename], cell.field, getDraftValue(row, cell));
-      });
-      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-      autoConfirmCategories(spec.filename);
-    }
-
     const reviewedCells = accepted.reduce((sum, row) => sum + row.cells.length, 0);
-    rewindRecord('wfoBackbone', 'WFO Backbone Assistant', `${reviewedCells} reviewed field${reviewedCells !== 1 ? 's' : ''} across ${accepted.length} specimen${accepted.length !== 1 ? 's' : ''}`, _rwBefore);
+
+    withRewind({
+      action: 'wfoBackbone', label: 'WFO Backbone Assistant',
+      summary: `${reviewedCells} reviewed field${reviewedCells !== 1 ? 's' : ''} across ${accepted.length} specimen${accepted.length !== 1 ? 's' : ''}`,
+      filenames: affectedFilenames, fields: affectedFields,
+    }, () => {
+      for (const row of accepted) {
+        const spec = APP.specimens[row.index];
+        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+        if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
+
+        row.cells.forEach(cell => {
+          stageFieldAsUnconfirmed(APP.state.specimens[spec.filename], cell.field, getDraftValue(row, cell));
+        });
+        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+        autoConfirmCategories(spec.filename);
+      }
+    });
+
     scheduleSaveState(affectedFilenames);
     renderFocusSidebar(getFocusCategories());
     renderFocusMain();
@@ -10859,16 +11077,12 @@ function renderAuthorshipPopupRow(row, options = {}) {
     rowClass = '',
   } = options;
 
-  const authPhotoBtnHtml = includePhotoButton
-    ? `<button type="button" class="btn-icon popup-quicktools-photo wfo-photo-btn auth-photo-btn" data-file="${escapeAttr(row.filename)}" title="Open specimen image reference"><img src="icons/image.svg" alt="" aria-hidden="true"></button>`
-    : '';
   const authQuickTools = renderPopupQuickTools(row, {
     tool: 'authorship',
     statusField,
     includePhoto: includePhotoButton,
     includeFlag: includeFlagButton,
     includeStatus: !!statusField,
-    photoButtonHtml: authPhotoBtnHtml,
   });
   return `
     <div class="auth-table-row ${row.hasChange ? '' : 'no-change'} ${rowClass}">
@@ -10884,83 +11098,6 @@ function renderAuthorshipPopupRow(row, options = {}) {
       <span class="auth-col-dest" style="${showDest ? '' : 'display:none'}">${row.destWouldChange ? `<span class="auth-val-dest">${escapeHtml(row.authorship)}</span>` : '<span class="auth-no-change">no change</span>'}</span>
     </div>
   `;
-}
-
-function showAuthorshipSpecimenReferencePopup(row, options = {}) {
-  const switchId = `auth-ref-switch-${Date.now()}`;
-  let imageType = tableImageType;
-  const { showDest = false, destField = '' } = options;
-
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-  overlay.innerHTML = `
-    <div class="wfo-reference-popup auth-reference-popup" onclick="event.stopPropagation()">
-      <div class="name-parser-header">
-        <span>${escapeHtml(getDisplayFilename(row.filename))}</span>
-        ${popupCloseBtnHtml('auth-ref-close')}
-      </div>
-      <div class="wfo-reference-toggle" id="auth-reference-toggle"></div>
-      <div class="wfo-reference-preview">
-        <div class="auth-table-header auth-reference-header">
-          <span class="popup-quicktools-header"></span>
-          <span class="auth-col-check"></span>
-          <span class="auth-col-file">Specimen</span>
-          <span class="auth-col-orig">scientificName (current)</span>
-          <span class="auth-col-arrow"></span>
-          <span class="auth-col-new">scientificName (after)</span>
-          <span class="auth-col-split">Authorship</span>
-          <span class="auth-col-dest" style="${showDest ? '' : 'display:none'}">${escapeHtml(destField)} (current)</span>
-          <span class="auth-col-arrow auth-col-dest-arrow" style="${showDest ? '' : 'display:none'}"></span>
-          <span class="auth-col-dest" style="${showDest ? '' : 'display:none'}">${escapeHtml(destField)} (after)</span>
-        </div>
-        ${renderAuthorshipPopupRow(row, {
-          includeCheckbox: false,
-          includeFlagButton: false,
-          includePhotoButton: false,
-          showDest,
-          rowClass: 'wfo-table-row-readonly',
-        })}
-      </div>
-      <div class="wfo-reference-images" id="auth-reference-images">
-        <div class="table-image-placeholder">Loading...</div>
-      </div>
-    </div>
-  `;
-
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
-  document.getElementById('auth-ref-close')?.addEventListener('click', close);
-
-  const sw = createSlideSwitch(switchId, [
-    { value: 'collage', label: 'Collage' },
-    { value: 'original', label: 'Original' }
-  ], imageType, (val) => {
-    imageType = val;
-    loadAuthReferenceImage();
-  });
-  const switchContainer = document.getElementById('auth-reference-toggle');
-  if (switchContainer) {
-    switchContainer.innerHTML = sw.html;
-    sw.setup();
-  }
-
-  async function loadAuthReferenceImage() {
-    const container = document.getElementById('auth-reference-images');
-    if (!container) return;
-    container.innerHTML = '<div class="table-image-placeholder">Loading...</div>';
-    const dataUrl = await window.api.getImage(APP.folderPath, row.filename, imageType, 'full');
-    if (!container.isConnected) return;
-    if (dataUrl) {
-      container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(row.filename))}">`;
-      container.querySelector('img')?.addEventListener('click', () => openImageModal(dataUrl));
-    } else {
-      container.innerHTML = `<div class="table-image-placeholder">${imageType === 'original' ? 'Original not available' : 'No image'}</div>`;
-    }
-  }
-
-  loadAuthReferenceImage();
 }
 
 function showAuthorshipPopup() {
@@ -11069,15 +11206,6 @@ function showAuthorshipPopup() {
       cb.addEventListener('change', () => checkStates.set(cb.dataset.file, cb.checked));
     });
     wirePopupQuickTools(listEl, { closeFn: () => overlay.remove(), onFlagRefresh: renderList });
-    listEl.querySelectorAll('.auth-photo-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const rowData = rows.find(item => item.filename === btn.dataset.file);
-        if (rowData) showAuthorshipSpecimenReferencePopup(rowData, { showDest, destField });
-      });
-    });
-
     updateHeaderVisibility();
   }
 
@@ -11117,23 +11245,25 @@ function showAuthorshipPopup() {
     const affectedFields = ['scientificName'];
     if (mode === 'move' && destField) affectedFields.push(destField);
     const affectedFilenames = accepted.map(r => APP.specimens[r.index].filename);
-    const _rwBefore = rewindCapture(affectedFilenames, affectedFields);
-
-    for (const r of accepted) {
-      const spec = APP.specimens[r.index];
-      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields)
-        APP.state.specimens[spec.filename].unconfirmed_fields = {};
-      if (r.sciWouldChange) {
-        APP.state.specimens[spec.filename].unconfirmed_fields['scientificName'] = r.newSciName;
+    withRewind({
+      action: 'authorshipSplit', label: 'Authorship Split',
+      summary: `${mode} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`,
+      filenames: affectedFilenames, fields: affectedFields,
+    }, () => {
+      for (const r of accepted) {
+        const spec = APP.specimens[r.index];
+        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+        if (!APP.state.specimens[spec.filename].unconfirmed_fields)
+          APP.state.specimens[spec.filename].unconfirmed_fields = {};
+        if (r.sciWouldChange) {
+          APP.state.specimens[spec.filename].unconfirmed_fields['scientificName'] = r.newSciName;
+        }
+        if (mode === 'move' && destField && r.destWouldChange) {
+          APP.state.specimens[spec.filename].unconfirmed_fields[destField] = r.authorship;
+        }
+        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
       }
-      if (mode === 'move' && destField && r.destWouldChange) {
-        APP.state.specimens[spec.filename].unconfirmed_fields[destField] = r.authorship;
-      }
-      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-    }
-
-    rewindRecord('authorshipSplit', 'Authorship Split', `${mode} (${accepted.length} specimen${accepted.length !== 1 ? 's' : ''})`, _rwBefore);
+    });
     scheduleSaveState(affectedFilenames);
     overlay.remove();
     renderFocusSidebar(getFocusCategories());
@@ -11836,44 +11966,52 @@ function binStatusSquareHtml(specimenIndex, field) {
 // square) so the user will double-check them later during specimen review.
 
 function bulkBinMarkUnconfirmed(items, field) {
-  const filenames = [];
-  const _rwBefore = rewindCapture(items.map(i => APP.specimens[i.index]?.filename).filter(Boolean), [field], { categories_confirmed: true });
-  for (const item of items) {
-    const spec = APP.specimens[item.index];
-    if (!spec) continue;
-    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    const st = APP.state.specimens[spec.filename];
-    const currentValue = getCurrentFieldValue(spec, field);
-    stageFieldAsUnconfirmed(st, field, currentValue);
-    st.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-    scheduleSaveState(spec.filename);
-    scheduleAutoSaveReviewed(spec.filename);
-    filenames.push(spec.filename);
-  }
-  if (filenames.length > 0) {
-    rewindRecord('binMarkUnconfirmed', 'Bin Mark Unconfirmed', `"${field}" on ${filenames.length} specimen${filenames.length !== 1 ? 's' : ''}`, _rwBefore);
-  }
+  const scopeFilenames = items.map(i => APP.specimens[i.index]?.filename).filter(Boolean);
+  withRewind({
+    action: 'binMarkUnconfirmed', label: 'Bin Mark Unconfirmed',
+    summary: (r) => `"${field}" on ${r.filenames.length} specimen${r.filenames.length !== 1 ? 's' : ''}`,
+    filenames: scopeFilenames, fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    const filenames = [];
+    for (const item of items) {
+      const spec = APP.specimens[item.index];
+      if (!spec) continue;
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      const st = APP.state.specimens[spec.filename];
+      const currentValue = getCurrentFieldValue(spec, field);
+      stageFieldAsUnconfirmed(st, field, currentValue);
+      st.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+      scheduleSaveState(spec.filename);
+      scheduleAutoSaveReviewed(spec.filename);
+      filenames.push(spec.filename);
+    }
+    return { filenames };
+  });
 }
 
 function bulkBinClearUnconfirmed(items, field) {
-  const filenames = [];
-  const _rwBefore = rewindCapture(items.map(i => APP.specimens[i.index]?.filename).filter(Boolean), [field], { categories_confirmed: true });
-  for (const item of items) {
-    const spec = APP.specimens[item.index];
-    if (!spec) continue;
-    if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-    const st = APP.state.specimens[spec.filename];
-    if (st.unconfirmed_fields?.[field] !== undefined) delete st.unconfirmed_fields[field];
-    st.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-    scheduleSaveState(spec.filename);
-    scheduleAutoSaveReviewed(spec.filename);
-    filenames.push(spec.filename);
-  }
-  if (filenames.length > 0) {
-    rewindRecord('binClearUnconfirmed', 'Bin Clear Unconfirmed', `"${field}" on ${filenames.length} specimen${filenames.length !== 1 ? 's' : ''}`, _rwBefore);
-  }
+  const scopeFilenames = items.map(i => APP.specimens[i.index]?.filename).filter(Boolean);
+  withRewind({
+    action: 'binClearUnconfirmed', label: 'Bin Clear Unconfirmed',
+    summary: (r) => `"${field}" on ${r.filenames.length} specimen${r.filenames.length !== 1 ? 's' : ''}`,
+    filenames: scopeFilenames, fields: [field], opts: { categories_confirmed: true },
+  }, () => {
+    const filenames = [];
+    for (const item of items) {
+      const spec = APP.specimens[item.index];
+      if (!spec) continue;
+      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+      const st = APP.state.specimens[spec.filename];
+      if (st.unconfirmed_fields?.[field] !== undefined) delete st.unconfirmed_fields[field];
+      st.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+      scheduleSaveState(spec.filename);
+      scheduleAutoSaveReviewed(spec.filename);
+      filenames.push(spec.filename);
+    }
+    return { filenames };
+  });
 }
 
 function wireBinButtons(container) {
@@ -12398,9 +12536,8 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
   const fieldValues = cachedFieldValues || getAllValuesForField(field);
   const analysis = analyzeSequenceGaps(fieldValues);
 
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell();
+  const overlay = shell.overlay;
 
   const totalMissing = analysis.groups.reduce((sum, g) => sum + g.missingCount, 0);
   const totalDuplicateValues = analysis.groups.reduce((sum, g) => sum + g.duplicateCount, 0);
@@ -12425,9 +12562,7 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-
-  const listEl = document.getElementById('gap-list');
+  const listEl = overlay.querySelector('#gap-list');
   if (analysis.totalPatterns === 0) {
     listEl.innerHTML = '<div class="focus-no-clusters" style="padding:24px">No numeric sequences detected</div>';
   } else if (analysis.groups.length === 0) {
@@ -12487,8 +12622,7 @@ function showSequenceGapPopup(cachedFieldValues, selectedField = focusField) {
     `).join('');
   }
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
+  const close = shell.close;
   document.getElementById('gap-close').addEventListener('click', close);
 }
 
@@ -12835,19 +12969,23 @@ function renderOcrComparisonSection() {
     if (newValue === '(empty)') newValue = '';
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
     const st = APP.state.specimens[spec.filename];
-    const _rwBefore = rewindCapture([spec.filename], [focusField], { categories_confirmed: true });
-    const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[focusField];
-    const aiStr = aiValue !== undefined ? String(aiValue) : '';
-    let source;
-    if (newValue === aiStr && aiStr !== '') source = 'ai';
-    else if (aiStr === '' && newValue !== '') source = 'user_added';
-    else if (newValue === '') source = 'confirmed_empty';
-    else source = 'edited';
-    st.accepted_fields[focusField] = { value: newValue, source };
-    if (st.unconfirmed_fields?.[focusField] !== undefined) delete st.unconfirmed_fields[focusField];
-    st.last_touched = new Date().toISOString();
-    autoConfirmCategories(spec.filename);
-    rewindRecord('ocrEdit', 'OCR Edit', `"${focusField}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    withRewind({
+      action: 'ocrEdit', label: 'OCR Edit',
+      summary: `"${focusField}" on ${getDisplayFilename(spec.filename)}`,
+      filenames: [spec.filename], fields: [focusField], opts: { categories_confirmed: true },
+    }, () => {
+      const aiValue = (tableDataCache[spec.filename]?.formatted_json || {})[focusField];
+      const aiStr = aiValue !== undefined ? String(aiValue) : '';
+      let source;
+      if (newValue === aiStr && aiStr !== '') source = 'ai';
+      else if (aiStr === '' && newValue !== '') source = 'user_added';
+      else if (newValue === '') source = 'confirmed_empty';
+      else source = 'edited';
+      st.accepted_fields[focusField] = { value: newValue, source };
+      if (st.unconfirmed_fields?.[focusField] !== undefined) delete st.unconfirmed_fields[focusField];
+      st.last_touched = new Date().toISOString();
+      autoConfirmCategories(spec.filename);
+    });
     scheduleSaveState(spec.filename);
     scheduleAutoSaveReviewed(spec.filename);
   };
@@ -12938,15 +13076,18 @@ function renderOcrComparisonSection() {
   container.querySelector('.ocr-uncertain-btn')?.addEventListener('click', () => {
     if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
     const st = APP.state.specimens[spec.filename];
-    const _rwBefore = rewindCapture([spec.filename], [focusField], { categories_confirmed: true });
 
-    const currentValue = getCurrentFieldValue(spec, focusField);
-    if (!st.unconfirmed_fields) st.unconfirmed_fields = {};
-    st.unconfirmed_fields[focusField] = currentValue;
-    if (st.accepted_fields?.[focusField]) delete st.accepted_fields[focusField];
-    autoConfirmCategories(spec.filename);
-
-    rewindRecord('markUncertain', 'Mark Uncertain', `"${focusField}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    withRewind({
+      action: 'markUncertain', label: 'Mark Uncertain',
+      summary: `"${focusField}" on ${getDisplayFilename(spec.filename)}`,
+      filenames: [spec.filename], fields: [focusField], opts: { categories_confirmed: true },
+    }, () => {
+      const currentValue = getCurrentFieldValue(spec, focusField);
+      if (!st.unconfirmed_fields) st.unconfirmed_fields = {};
+      st.unconfirmed_fields[focusField] = currentValue;
+      if (st.accepted_fields?.[focusField]) delete st.accepted_fields[focusField];
+      autoConfirmCategories(spec.filename);
+    });
     scheduleSaveState(spec.filename);
     scheduleAutoSaveReviewed(spec.filename);
     renderFocusSidebar(getFocusCategories());
@@ -12973,7 +13114,11 @@ async function loadFocusImage(index) {
   hideNavSpinner();
   if (dataUrl) {
     container.innerHTML = `<img src="${dataUrl}" alt="${escapeAttr(getDisplayFilename(spec.filename))}">`;
-    container.querySelector('img').addEventListener('click', () => openImageModal(dataUrl));
+    container.querySelector('img').addEventListener('click', () => openSpecimenImagePopup({
+      filename: spec.filename,
+      initialImageType: tableImageType,
+      initialZoomMode: tableImageZoomMode,
+    }));
     applyImageZoomMode('focus-image-container', tableImageZoomMode);
   } else {
     container.innerHTML = '<div class="table-image-placeholder">No image</div>';
@@ -13008,13 +13153,17 @@ function startFocusCellEdit(cell, specimenIndex, fieldName) {
     // Enter always marks as unconfirmed; blur only if value changed
     if (force || newValue !== currentValue) {
       if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      const _rwBefore = rewindCapture([spec.filename], [fieldName]);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
-        APP.state.specimens[spec.filename].unconfirmed_fields = {};
-      }
-      APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
-      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-      rewindRecord('focusCellEdit', 'Cell Edit', `"${fieldName}" on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+      withRewind({
+        action: 'focusCellEdit', label: 'Cell Edit',
+        summary: `"${fieldName}" on ${getDisplayFilename(spec.filename)}`,
+        filenames: [spec.filename], fields: [fieldName],
+      }, () => {
+        if (!APP.state.specimens[spec.filename].unconfirmed_fields) {
+          APP.state.specimens[spec.filename].unconfirmed_fields = {};
+        }
+        APP.state.specimens[spec.filename].unconfirmed_fields[fieldName] = newValue;
+        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+      });
       scheduleSaveState(spec.filename);
     }
 
@@ -13084,21 +13233,23 @@ function mergeCluster(cluster, mergeValue, field = focusField) {
   }
   if (affectedFilenames.length === 0) return 0;
 
-  const _rwBefore = rewindCapture(affectedFilenames, [field]);
+  withRewind({
+    action: 'clusterMerge', label: 'Cluster Merge',
+    summary: `"${field}" → "${mergeValue}" across ${affectedFilenames.length} specimen${affectedFilenames.length !== 1 ? 's' : ''}`,
+    filenames: affectedFilenames, fields: [field],
+  }, () => {
+    for (const spec of APP.specimens) {
+      const currentVal = getCurrentFieldValue(spec, field);
 
-  for (const spec of APP.specimens) {
-    const currentVal = getCurrentFieldValue(spec, field);
-
-    if (valuesToMerge.has(currentVal) && currentVal !== mergeValue) {
-      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      const specState = APP.state.specimens[spec.filename];
-      stageFieldAsUnconfirmed(specState, field, mergeValue);
-      specState.last_touched = new Date().toISOString();
-      autoConfirmCategories(spec.filename);
+      if (valuesToMerge.has(currentVal) && currentVal !== mergeValue) {
+        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+        const specState = APP.state.specimens[spec.filename];
+        stageFieldAsUnconfirmed(specState, field, mergeValue);
+        specState.last_touched = new Date().toISOString();
+        autoConfirmCategories(spec.filename);
+      }
     }
-  }
-
-  rewindRecord('clusterMerge', 'Cluster Merge', `"${field}" → "${mergeValue}" across ${affectedFilenames.length} specimen${affectedFilenames.length !== 1 ? 's' : ''}`, _rwBefore);
+  });
   scheduleSaveState(affectedFilenames);
   renderFocusMain();
   renderFocusSidebar(getFocusCategories());
@@ -13181,155 +13332,132 @@ function applyFindReplace(findVal, replaceVal) {
   const specimens = getSpecimensForToolScope();
   const replaceEmptyCells = isEmptyCellReplace(findVal, replaceVal);
 
-  // Capture before state for all specimens/fields in scope
   const allFilenames = specimens.map(s => s.filename);
-  const _rwBefore = rewindCapture(allFilenames, fields);
-
-  for (const spec of specimens) {
-    for (const field of fields) {
-      const currentVal = getCurrentFieldValue(spec, field);
-      const newVal = replaceEmptyCells
-        ? (currentVal === '' ? replaceVal : currentVal)
-        : currentVal.replace(new RegExp(escapeRegex(findVal), 'gi'), replaceVal);
-      if (newVal !== currentVal) {
-        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-        if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-        APP.state.specimens[spec.filename].unconfirmed_fields[field] = newVal;
-        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-        count++;
+  const result = withRewind({
+    action: 'findReplace', label: 'Find & Replace',
+    summary: (r) => `${getFindReplaceSummaryLabel(findVal, replaceVal)} (${r.count} change${r.count !== 1 ? 's' : ''})`,
+    filenames: allFilenames, fields,
+  }, () => {
+    let count = 0;
+    for (const spec of specimens) {
+      for (const field of fields) {
+        const currentVal = getCurrentFieldValue(spec, field);
+        const newVal = replaceEmptyCells
+          ? (currentVal === '' ? replaceVal : currentVal)
+          : currentVal.replace(new RegExp(escapeRegex(findVal), 'gi'), replaceVal);
+        if (newVal !== currentVal) {
+          if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+          if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
+          APP.state.specimens[spec.filename].unconfirmed_fields[field] = newVal;
+          APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
+          count++;
+        }
       }
     }
-  }
-
-  rewindRecord('findReplace', 'Find & Replace', `${getFindReplaceSummaryLabel(findVal, replaceVal)} (${count} change${count !== 1 ? 's' : ''})`, _rwBefore);
+    return { count };
+  });
+  count = result.count;
   scheduleSaveState(allFilenames);
   renderFocusMain();
   renderFocusSidebar(getFocusCategories());
   return count;
 }
 
-function previewCaseTransform(type) {
-  const fields = getFieldsForToolScope();
-  const specimens = getSpecimensForToolScope();
-  let count = 0;
-
-  for (const spec of specimens) {
-    for (const field of fields) {
-      const currentVal = getCurrentFieldValue(spec, field);
-      if (currentVal === '') continue;
-
-      const newVal = transformCaseText(currentVal, type);
-
-      if (newVal !== currentVal) count++;
-    }
-  }
-
-  return { count, specimens, fields };
+function _caseTypeLabel(type) {
+  return type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
 }
 
-function applyCaseTransform(type) {
-  let count = 0;
-  const fields = getFieldsForToolScope();
-  const specimens = getSpecimensForToolScope();
+// Unified preview+apply engine for case transforms.
+// scope: 'form' (focus/review) or 'table'
+// dryRun: true returns counts only; false performs the mutation under withRewind.
+function transformFieldsBatch(type, scope, { dryRun = false } = {}) {
+  const fields = scope === 'table'
+    ? [getCurrentTableCaseField()].filter(Boolean)
+    : getFieldsForToolScope();
+  const specimens = scope === 'table'
+    ? getTableCaseScopeRows().map(r => APP.specimens[r.index]).filter(Boolean)
+    : getSpecimensForToolScope();
 
-  const allFilenames = specimens.map(s => s.filename);
-  const _rwBefore = rewindCapture(allFilenames, fields);
+  const field = scope === 'table' ? (fields[0] || null) : undefined;
 
-  for (const spec of specimens) {
-    for (const field of fields) {
-      const currentVal = getCurrentFieldValue(spec, field);
-      if (currentVal === '') continue;
-
-      const newVal = transformCaseText(currentVal, type);
-
-      if (newVal !== currentVal) {
-        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-        if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-        APP.state.specimens[spec.filename].unconfirmed_fields[field] = newVal;
-        APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-        count++;
-      }
-    }
+  if (fields.length === 0) {
+    return scope === 'table'
+      ? { field: null, count: 0, specimens }
+      : { count: 0, specimens, fields };
   }
 
-  const typeLabel = type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
-  rewindRecord('caseTransform', 'Case Transform', `${typeLabel} (${count} change${count !== 1 ? 's' : ''})`, _rwBefore);
-  scheduleSaveState(allFilenames);
-  renderFocusMain();
-  renderFocusSidebar(getFocusCategories());
-  return count;
+  if (dryRun) {
+    let count = 0;
+    for (const spec of specimens) for (const f of fields) {
+      const cur = getCurrentFieldValue(spec, f);
+      if (cur !== '' && transformCaseText(cur, type) !== cur) count++;
+    }
+    return scope === 'table' ? { field, count, specimens } : { count, specimens, fields };
+  }
+
+  const filenames = specimens.map(s => s.filename);
+  const result = withRewind(
+    {
+      action: 'caseTransform',
+      label: 'Case Transform',
+      summary: (r) => `${_caseTypeLabel(type)} (${r.count} change${r.count !== 1 ? 's' : ''})`,
+      filenames,
+      fields,
+    },
+    () => {
+      let count = 0;
+      for (const spec of specimens) for (const f of fields) {
+        const cur = getCurrentFieldValue(spec, f);
+        if (cur === '') continue;
+        const nv = transformCaseText(cur, type);
+        if (nv === cur) continue;
+        if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
+        const st = APP.state.specimens[spec.filename];
+        if (!st.unconfirmed_fields) st.unconfirmed_fields = {};
+        st.unconfirmed_fields[f] = nv;
+        st.last_touched = new Date().toISOString();
+        count++;
+      }
+      scheduleSaveState(filenames);
+      if (scope === 'table') {
+        renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
+      } else {
+        renderFocusMain();
+        renderFocusSidebar(getFocusCategories());
+      }
+      return { count };
+    }
+  );
+
+  return scope === 'table'
+    ? { field, count: result.count, specimens }
+    : { count: result.count, specimens, fields };
 }
 
 function confirmCaseTransform(type) {
-  const preview = previewCaseTransform(type);
-  const typeLabel = type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
+  const preview = transformFieldsBatch(type, 'form', { dryRun: true });
+  const typeLabel = _caseTypeLabel(type);
   showApplyCancelPopup(
     `Apply ${typeLabel}?`,
     preview.count > 0
       ? `Apply <strong>${typeLabel}</strong> to <strong>${preview.count}</strong> cell${preview.count !== 1 ? 's' : ''} across <strong>${preview.specimens.length}</strong> specimen${preview.specimens.length !== 1 ? 's' : ''} within <strong>${escapeHtml(focusField)}</strong>${focusFilter !== null ? ` for the current filtered selection <strong>${escapeHtml(focusFilter || '(empty)')}</strong>` : ''}.`
       : `No changes would be made by applying <strong>${typeLabel}</strong> within <strong>${escapeHtml(focusField)}</strong>${focusFilter !== null ? ` for the current filtered selection <strong>${escapeHtml(focusFilter || '(empty)')}</strong>` : ''}.`,
-    () => { if (preview.count > 0) applyCaseTransform(type); },
+    () => { if (preview.count > 0) transformFieldsBatch(type, 'form'); },
     'Apply'
   );
 }
 
-function previewTableCaseTransform(type) {
-  const field = getCurrentTableCaseField();
-  const rows = getTableCaseScopeRows();
-  const specimens = rows.map(r => APP.specimens[r.index]).filter(Boolean);
-  let count = 0;
-
-  if (!field) return { field: null, count, specimens };
-
-  for (const spec of specimens) {
-    const currentVal = getCurrentFieldValue(spec, field);
-    if (currentVal === '') continue;
-    if (transformCaseText(currentVal, type) !== currentVal) count++;
-  }
-
-  return { field, count, specimens };
-}
-
-function applyTableCaseTransform(type) {
-  const preview = previewTableCaseTransform(type);
-  if (!preview.field) return 0;
-
-  const allFilenames = preview.specimens.map(s => s.filename);
-  const _rwBefore = rewindCapture(allFilenames, [preview.field]);
-  let count = 0;
-
-  for (const spec of preview.specimens) {
-    const currentVal = getCurrentFieldValue(spec, preview.field);
-    if (currentVal === '') continue;
-
-    const newVal = transformCaseText(currentVal, type);
-    if (newVal !== currentVal) {
-      if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-      if (!APP.state.specimens[spec.filename].unconfirmed_fields) APP.state.specimens[spec.filename].unconfirmed_fields = {};
-      APP.state.specimens[spec.filename].unconfirmed_fields[preview.field] = newVal;
-      APP.state.specimens[spec.filename].last_touched = new Date().toISOString();
-      count++;
-    }
-  }
-
-  const typeLabel = type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
-  rewindRecord('caseTransform', 'Case Transform', `${typeLabel} (${count} change${count !== 1 ? 's' : ''})`, _rwBefore);
-  scheduleSaveState(allFilenames);
-  renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
-  return count;
-}
-
 function confirmTableCaseTransform(type) {
-  const preview = previewTableCaseTransform(type);
+  const preview = transformFieldsBatch(type, 'table', { dryRun: true });
   if (!preview.field) return;
 
-  const typeLabel = type === 'title' ? 'Title Case' : type === 'upper' ? 'UPPERCASE' : 'lowercase';
+  const typeLabel = _caseTypeLabel(type);
   showApplyCancelPopup(
     `Apply ${typeLabel}?`,
     preview.count > 0
       ? `Apply <strong>${typeLabel}</strong> to <strong>${preview.count}</strong> cell${preview.count !== 1 ? 's' : ''} across <strong>${preview.specimens.length}</strong> specimen${preview.specimens.length !== 1 ? 's' : ''} within <strong>${escapeHtml(preview.field)}</strong>${_tableCurrentFilter ? ' for the current filtered table rows' : ''}.`
       : `No changes would be made by applying <strong>${typeLabel}</strong> within <strong>${escapeHtml(preview.field)}</strong>${_tableCurrentFilter ? ' for the current filtered table rows' : ''}.`,
-    () => { if (preview.count > 0) applyTableCaseTransform(type); },
+    () => { if (preview.count > 0) transformFieldsBatch(type, 'table'); },
     'Apply'
   );
 }
@@ -13464,16 +13592,12 @@ function updateSettingsUpdateUI(data) {
 // ── Flagged Specimens Popup ─────────────────────────────────
 
 function openFlaggedSpecimensPopup() {
-  const existing = document.getElementById('flagged-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
-
-  const overlay = document.createElement('div');
-  overlay.id = 'flagged-overlay';
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  // Flagged popup is click-through-safe: we do NOT want the outside-click
+  // dismiss because the popup is a long list with potentially-interactive
+  // rows; preserve legacy behavior (close only via X button).
+  const shell = createPopupShell({ overlayId: 'flagged-overlay', dismissOnOutsideClick: false });
+  if (!shell) return;
+  const overlay = shell.overlay;
 
   const collectFlagged = () => {
     const flagged = [];
@@ -13521,7 +13645,7 @@ function openFlaggedSpecimensPopup() {
   const render = () => {
     const { html, count } = renderRows();
     if (count === 0) {
-      overlay.remove();
+      close();
       return;
     }
     overlay.innerHTML = `
@@ -13551,7 +13675,7 @@ function openFlaggedSpecimensPopup() {
     wireRowHandlers();
   };
 
-  const close = () => overlay.remove();
+  const close = shell.close;
 
   const wireRowHandlers = () => {
     overlay.querySelector('#flagged-popup-close')?.addEventListener('click', close);
@@ -13565,14 +13689,18 @@ function openFlaggedSpecimensPopup() {
         const tool = btn.dataset.tool;
         const st = APP.state.specimens?.[filename];
         if (!st) return;
-        const _rwBefore = rewindCapture([filename], [], { flagged: true });
-        removeTagFromSpecimen(filename, tool);
-        if ((st.flag_tags || []).length === 0) {
-          st.flagged = false;
-          st.flag_note = '';
-        }
-        st.last_touched = new Date().toISOString();
-        rewindRecord('tagFlag', 'Remove Flag Tag', `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`, _rwBefore);
+        withRewind({
+          action: 'tagFlag', label: 'Remove Flag Tag',
+          summary: `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`,
+          filenames: [filename], opts: { flagged: true },
+        }, () => {
+          removeTagFromSpecimen(filename, tool);
+          if ((st.flag_tags || []).length === 0) {
+            st.flagged = false;
+            st.flag_note = '';
+          }
+          st.last_touched = new Date().toISOString();
+        });
         scheduleSaveState(filename);
         refreshSpecimenFlagUi(filename);
         render();
@@ -13608,10 +13736,8 @@ function openFlaggedSpecimensPopup() {
   };
 
   const initialFlagged = collectFlagged();
-  if (initialFlagged.length === 0) return;
+  if (initialFlagged.length === 0) { shell.close(); return; }
 
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
   render();
 }
 
@@ -13633,11 +13759,6 @@ function openChecklistPopup() {
   if (checklist.length === 0) return;
   if (!APP.project.checklist_checked) APP.project.checklist_checked = [];
   const checked = APP.project.checklist_checked;
-  const existing = document.getElementById('checklist-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
 
   // Map tool category names for bracket-link matching
   const toolCatMap = {};
@@ -13645,10 +13766,9 @@ function openChecklistPopup() {
     toolCatMap[cat.toLowerCase()] = cat;
   }
 
-  const overlay = document.createElement('div');
-  overlay.id = 'checklist-overlay';
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ overlayId: 'checklist-overlay' });
+  if (!shell) return;
+  const overlay = shell.overlay;
 
   const renderItems = () => checklist.map((item, i) => {
     const isChecked = checked.includes(i);
@@ -13680,9 +13800,7 @@ function openChecklistPopup() {
       </div>
     </div>
   `;
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.getElementById('checklist-close').addEventListener('click', () => overlay.remove());
+  document.getElementById('checklist-close').addEventListener('click', shell.close);
 
   const wireItems = () => {
     const body = document.getElementById('checklist-body');
@@ -13711,10 +13829,9 @@ function openChecklistPopup() {
       link.addEventListener('click', (e) => {
         e.stopPropagation();
         const cat = link.dataset.toolCat;
-        overlay.remove();
+        shell.close();
         focusToolCategory = cat;
-        showView('focus');
-        renderFocusView();
+        openAppView('focus');
       });
     });
   };
@@ -13733,18 +13850,10 @@ function renderHotkeyShortcutHtml(keys) {
 }
 
 function openHotkeysPopup() {
-  const existing = document.getElementById('hotkeys-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
+  const shell = createPopupShell({ overlayId: 'hotkeys-overlay' });
+  if (!shell) return; // Toggle-off — re-click closed the existing popup
 
-  const overlay = document.createElement('div');
-  overlay.id = 'hotkeys-overlay';
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
-
-  overlay.innerHTML = `
+  shell.overlay.innerHTML = `
     <div class="hotkeys-popup" onclick="event.stopPropagation()">
       <div class="hotkeys-header">
         <span class="hotkeys-title">Hotkeys</span>
@@ -13766,31 +13875,21 @@ function openHotkeysPopup() {
       </div>
     </div>
   `;
-
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
-  overlay.querySelector('#hotkeys-close')?.addEventListener('click', close);
+  shell.overlay.querySelector('#hotkeys-close')?.addEventListener('click', shell.close);
 }
 
 // ── Find Popup ──────────────────────────────────────────────
 
 async function openFindPopup() {
-  const existing = document.getElementById('find-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
-
   // Ensure all specimens are loaded so we can search their fields
   await ensureAllSpecimensCached();
 
   const availableFields = getAvailableProjectFields();
 
-  const overlay = document.createElement('div');
-  overlay.id = 'find-overlay';
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ overlayId: 'find-overlay' });
+  if (!shell) return;
+  const overlay = shell.overlay;
+  const close = shell.close;
 
   overlay.innerHTML = `
     <div class="find-popup" onclick="event.stopPropagation()">
@@ -13810,9 +13909,6 @@ async function openFindPopup() {
     </div>
   `;
 
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', close);
-  document.body.appendChild(overlay);
   overlay.querySelector('#find-close')?.addEventListener('click', close);
 
   const input = overlay.querySelector('#find-input');
@@ -13909,7 +14005,7 @@ function renderFindResults(body, summary, query, fieldRestriction) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
-      document.getElementById('find-overlay')?.remove();
+      closePopupById('find-overlay');
       showView('review');
       loadSpecimen(idx);
     });
@@ -13981,16 +14077,17 @@ function highlightFindMatch(value, query) {
 }
 
 function openSettingsPopup() {
-  const existing = document.getElementById('settings-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
-
-  const overlay = document.createElement('div');
-  overlay.id = 'settings-overlay';
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  // saveCurrentSettings runs whenever the popup closes, by any route
+  // (close button, outside click, Escape). We suppress the shell's default
+  // click-outside handler and install our own so we can invoke save.
+  let settingsDirty = true; // save on any close; set false to skip
+  const shell = createPopupShell({
+    overlayId: 'settings-overlay',
+    dismissOnOutsideClick: false,
+    onClose: () => { if (settingsDirty) saveCurrentSettings(); },
+  });
+  if (!shell) return;
+  const overlay = shell.overlay;
 
   overlay.innerHTML = `
     <div class="settings-popup" onclick="event.stopPropagation()">
@@ -14202,13 +14299,9 @@ function openSettingsPopup() {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => { overlay.remove(); saveCurrentSettings(); });
-
-  document.getElementById('settings-close-top').addEventListener('click', () => {
-    overlay.remove();
-    saveCurrentSettings();
-  });
+  // Close routes — each goes through shell.close which triggers onClose (save).
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) shell.close(); });
+  document.getElementById('settings-close-top').addEventListener('click', shell.close);
   document.getElementById('settings-export-project')?.addEventListener('click', exportProject);
   document.getElementById('btn-open-progress-tracker')?.addEventListener('click', () => {
     openProgressTrackerPopup();
@@ -14392,9 +14485,8 @@ function openSettingsPopup() {
 }
 
 function showResetProjectDialog() {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-modal-overlay';
-  overlay.style.cursor = 'default';
+  const shell = createPopupShell({ zIndex: 10000 });
+  const overlay = shell.overlay;
 
   overlay.innerHTML = `
     <div style="background:var(--bg-secondary);border:2px solid var(--error);border-radius:var(--radius);padding:24px;max-width:480px;cursor:default" onclick="event.stopPropagation()">
@@ -14418,13 +14510,12 @@ function showResetProjectDialog() {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', () => overlay.remove());
-  document.getElementById('reset-cancel').addEventListener('click', () => overlay.remove());
+  const close = shell.close;
+  document.getElementById('reset-cancel').addEventListener('click', close);
   document.getElementById('reset-confirm').addEventListener('click', async () => {
-    overlay.remove();
+    close();
     // Close settings popup too
-    document.querySelectorAll('.image-modal-overlay').forEach(o => o.remove());
+    document.querySelectorAll('.image-modal-overlay, .rewind-overlay').forEach(closePopupElement);
     await performProjectReset();
   });
 }
@@ -14469,20 +14560,22 @@ function acceptAllFields() {
   const cat = categories.find(c => c.name === APP.activeCategory);
   if (!cat) return;
 
-  const _rwBefore = rewindCapture([spec.filename], cat.fields, { categories_confirmed: true });
+  withRewind({
+    action: 'acceptAll', label: 'Accept All Fields',
+    summary: `${cat.fields.length} fields in ${cat.name} on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: cat.fields, opts: { categories_confirmed: true },
+  }, () => {
+    for (const field of cat.fields) {
+      if (specState.accepted_fields[field]) continue; // Already accepted
+      const val = fj[field];
+      const strVal = val !== undefined ? String(val) : '';
+      const source = strVal === '' ? 'confirmed_empty' : 'ai';
+      specState.accepted_fields[field] = { value: strVal, source };
+    }
 
-  for (const field of cat.fields) {
-    if (specState.accepted_fields[field]) continue; // Already accepted
-    const val = fj[field];
-    const strVal = val !== undefined ? String(val) : '';
-    const source = strVal === '' ? 'confirmed_empty' : 'ai';
-    specState.accepted_fields[field] = { value: strVal, source };
-  }
-
-  specState.last_touched = new Date().toISOString();
-  autoConfirmCategories(spec.filename);
-
-  rewindRecord('acceptAll', 'Accept All Fields', `${cat.fields.length} fields in ${cat.name} on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    specState.last_touched = new Date().toISOString();
+    autoConfirmCategories(spec.filename);
+  });
 
   renderCategoryTabs();
   renderCategoryForm();
@@ -14502,30 +14595,32 @@ function confirmRecordsFields() {
   const cat = categories.find(c => c.name === APP.activeCategory);
   if (!cat) return;
 
-  const _rwBefore = rewindCapture([spec.filename], cat.fields, { categories_confirmed: true });
+  withRewind({
+    action: 'confirmRecords', label: 'Confirm Records',
+    summary: `${cat.fields.length} fields in ${cat.name} on ${getDisplayFilename(spec.filename)}`,
+    filenames: [spec.filename], fields: cat.fields, opts: { categories_confirmed: true },
+  }, () => {
+    for (const field of cat.fields) {
+      // Confirm whatever is currently in the Reviewed Record column as-is.
+      // This mirrors pressing Enter on every field: unconfirmed edits get
+      // accepted, already-accepted fields stay as they are, and untouched
+      // fields get accepted as empty (zero-trust: VoucherVision content is
+      // NOT pulled in).
+      const hasUnconfirmed = specState.unconfirmed_fields?.[field] !== undefined;
+      const hasAccepted = specState.accepted_fields?.[field] !== undefined;
+      if (hasAccepted && !hasUnconfirmed) continue; // already confirmed — skip
+      const reviewedVal = hasUnconfirmed
+        ? specState.unconfirmed_fields[field]
+        : (hasAccepted ? specState.accepted_fields[field].value : '');
+      const aiVal = fj[field];
+      const source = deriveAcceptedSource(aiVal, reviewedVal);
+      specState.accepted_fields[field] = { value: reviewedVal, source };
+      if (hasUnconfirmed) delete specState.unconfirmed_fields[field];
+    }
 
-  for (const field of cat.fields) {
-    // Confirm whatever is currently in the Reviewed Record column as-is.
-    // This mirrors pressing Enter on every field: unconfirmed edits get
-    // accepted, already-accepted fields stay as they are, and untouched
-    // fields get accepted as empty (zero-trust: VoucherVision content is
-    // NOT pulled in).
-    const hasUnconfirmed = specState.unconfirmed_fields?.[field] !== undefined;
-    const hasAccepted = specState.accepted_fields?.[field] !== undefined;
-    if (hasAccepted && !hasUnconfirmed) continue; // already confirmed — skip
-    const reviewedVal = hasUnconfirmed
-      ? specState.unconfirmed_fields[field]
-      : (hasAccepted ? specState.accepted_fields[field].value : '');
-    const aiVal = fj[field];
-    const source = deriveAcceptedSource(aiVal, reviewedVal);
-    specState.accepted_fields[field] = { value: reviewedVal, source };
-    if (hasUnconfirmed) delete specState.unconfirmed_fields[field];
-  }
-
-  specState.last_touched = new Date().toISOString();
-  autoConfirmCategories(spec.filename);
-
-  rewindRecord('confirmRecords', 'Confirm Records', `${cat.fields.length} fields in ${cat.name} on ${getDisplayFilename(spec.filename)}`, _rwBefore);
+    specState.last_touched = new Date().toISOString();
+    autoConfirmCategories(spec.filename);
+  });
 
   renderCategoryTabs();
   renderCategoryForm();

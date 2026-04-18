@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const yaml = require('js-yaml');
 
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/Gene-Weaver/VoucherVision/main/custom_prompts/';
@@ -64,32 +63,11 @@ async function fetchPrompt(promptName, folderPath) {
   }
 }
 
-function fetchFromGitHub(promptName) {
+async function fetchFromGitHub(promptName) {
   const url = GITHUB_RAW_BASE + promptName;
-
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        // Follow redirect
-        https.get(res.headers.location, (res2) => {
-          collectResponse(res2, resolve, reject);
-        }).on('error', reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-        return;
-      }
-      collectResponse(res, resolve, reject);
-    }).on('error', reject);
-  });
-}
-
-function collectResponse(res, resolve, reject) {
-  let data = '';
-  res.on('data', chunk => { data += chunk; });
-  res.on('end', () => resolve(data));
-  res.on('error', reject);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return await res.text();
 }
 
 function parsePromptYaml(rawYaml, promptName) {

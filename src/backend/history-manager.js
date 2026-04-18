@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { atomicWrite } = require('./util/file-utils');
+
 const INPROGRESS_DIR = '_INPROGRESS';
 const HISTORY_FILENAME = '_history.json';
 // Legacy path (for migration detection)
@@ -40,11 +42,7 @@ function loadHistory(folderPath) {
 
       // Auto-migrate: atomic write to new path, then remove old
       try {
-        const dir = path.dirname(newPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const tmpPath = newPath + '.tmp';
-        fs.writeFileSync(tmpPath, raw, 'utf-8');
-        fs.renameSync(tmpPath, newPath);
+        atomicWrite(newPath, raw);
         fs.unlinkSync(legacyPath);
       } catch (e) {
         console.warn('Failed to migrate history file:', e.message);
@@ -64,13 +62,8 @@ function loadHistory(folderPath) {
  * Writes to _INPROGRESS/_history.json.
  */
 function saveHistory(folderPath, historyData) {
-  const histPath = getHistoryPath(folderPath);
-  const dir = path.dirname(histPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  const tmpPath = histPath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(historyData), 'utf-8');
-  fs.renameSync(tmpPath, histPath);
+  // History files can be large; preserve compact serialization by pre-stringifying.
+  atomicWrite(getHistoryPath(folderPath), JSON.stringify(historyData));
   return true;
 }
 

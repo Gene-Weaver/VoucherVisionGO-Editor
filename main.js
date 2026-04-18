@@ -1,7 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
 const { autoUpdater } = require('electron-updater');
 const fileManager = require('./src/backend/file-manager');
 const stateManager = require('./src/backend/state-manager');
@@ -21,29 +20,25 @@ function isPortableWindows() {
   return process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_DIR != null;
 }
 
-function checkGitHubRelease() {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'api.github.com',
-      path: '/repos/Gene-Weaver/VoucherVisionGO-Editor/releases/latest',
-      headers: { 'User-Agent': 'VoucherVisionGO-Editor' }
+async function checkGitHubRelease() {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(
+      'https://api.github.com/repos/Gene-Weaver/VoucherVisionGO-Editor/releases/latest',
+      { headers: { 'User-Agent': 'VoucherVisionGO-Editor' }, signal: controller.signal }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const release = await res.json();
+    return {
+      version: release.tag_name ? release.tag_name.replace(/^v/, '') : null,
+      releaseUrl: release.html_url,
+      publishedAt: release.published_at,
+      body: release.body
     };
-    https.get(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const release = JSON.parse(data);
-          resolve({
-            version: release.tag_name ? release.tag_name.replace(/^v/, '') : null,
-            releaseUrl: release.html_url,
-            publishedAt: release.published_at,
-            body: release.body
-          });
-        } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // Install a minimal application menu that keeps standard text-editing

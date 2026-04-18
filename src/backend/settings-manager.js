@@ -3,6 +3,7 @@ const path = require('path');
 const { app } = require('electron');
 
 const ThemeDefaults = require('../shared/theme-defaults');
+const { atomicWrite } = require('./util/file-utils');
 
 const INPROGRESS_DIR = '_INPROGRESS';
 const SETTINGS_FILENAME = '_settings.json';
@@ -39,14 +40,6 @@ function getProjectSettingsPath(folderPath) {
 
 function getLegacySettingsPath(folderPath) {
   return path.join(folderPath, LEGACY_SETTINGS_FILENAME);
-}
-
-function atomicWrite(filePath, data) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmp, filePath);
 }
 
 /**

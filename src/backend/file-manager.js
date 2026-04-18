@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const CompletionEvaluator = require('../shared/completion');
+const { atomicWrite } = require('./util/file-utils');
 
 const STATE_FILENAME = '_vvgo_editor_state.json';
 const REVIEWED_SUFFIX = '__REVIEWED';
@@ -326,12 +327,10 @@ function writeReviewedToFolder(folderPath, filename, reviewedData) {
   ensureReviewedDir(folderPath);
   const reviewedFilename = filename.replace(/\.json$/, `${REVIEWED_SUFFIX}.json`);
   const filePath = path.join(folderPath, REVIEWED_DIR, reviewedFilename);
-  const tmpPath = filePath + '.tmp';
 
   assertPathWithinProject(folderPath, filePath);
 
-  fs.writeFileSync(tmpPath, JSON.stringify(reviewedData, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  atomicWrite(filePath, reviewedData);
   return reviewedFilename;
 }
 
@@ -344,10 +343,7 @@ function writeReviewedToFolder(folderPath, filename, reviewedData) {
 function writeReviewed(folderPath, filename, reviewedData) {
   const reviewedFilename = filename.replace(/\.json$/, `${REVIEWED_SUFFIX}.json`);
   const filePath = path.join(folderPath, reviewedFilename);
-  const tmpPath = filePath + '.tmp';
-
-  fs.writeFileSync(tmpPath, JSON.stringify(reviewedData, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, filePath);
+  atomicWrite(filePath, reviewedData);
   return reviewedFilename;
 }
 

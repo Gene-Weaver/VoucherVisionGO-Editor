@@ -166,6 +166,50 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
   }
 }
 
+/**
+ * Wrap a mutation in capture + record. Use ONLY for atomic mutations.
+ * Keystroke-level edits that should aggregate into a single history entry
+ * must use the registerPendingRewindInput/commitPendingRewindInput subsystem
+ * instead.
+ *
+ * @param {Object} spec
+ * @param {string} spec.action                    Machine-readable action type
+ * @param {string} spec.label                     Short human-readable label
+ * @param {string|function} spec.summary          Summary string, or a function
+ *                                                 that receives mutationFn's
+ *                                                 return value and produces one.
+ * @param {string[]} spec.filenames
+ * @param {string[]} [spec.fields=[]]
+ * @param {Object} [spec.opts={}]                 Extra capture flags
+ *                                                 (categories_confirmed, flagged)
+ * @param {function} mutationFn                   Performs the mutation; may
+ *                                                 return any value that gets
+ *                                                 forwarded through to the
+ *                                                 caller (and to the summary fn).
+ * @returns whatever mutationFn returned
+ */
+function withRewind({ action, label, summary, filenames, fields = [], opts = {} }, mutationFn) {
+  const before = rewindCapture(filenames, fields, opts);
+  const result = mutationFn();
+  const resolvedSummary = typeof summary === 'function' ? summary(result) : summary;
+  rewindRecord(action, label, resolvedSummary, before);
+  return result;
+}
+
+/**
+ * Capture rewind state now and commit it later. Use this for rare flows where
+ * the user-visible mutation is synchronous but the history label/summary is
+ * finalized after a follow-up prompt or deferred callback.
+ */
+function startRewindEntry({ action, label, summary, filenames, fields = [], opts = {} }) {
+  const before = rewindCapture(filenames, fields, opts);
+  return (result) => {
+    const resolvedSummary = typeof summary === 'function' ? summary(result) : summary;
+    rewindRecord(action, label, resolvedSummary, before);
+    return result;
+  };
+}
+
 // ── Rewind ──────────────────────────────────────────────────
 
 /**
@@ -342,20 +386,16 @@ function openRewindPopup() {
   if (REWIND.stack.length === 0) return;
 
   // Toggle existing popup if any
-  const existing = document.getElementById('rewind-overlay');
-  if (existing) {
-    existing.remove();
-    return;
-  }
+  const shell = createPopupShell({
+    overlayId: 'rewind-overlay',
+    overlayClass: 'rewind-overlay',
+    zIndex: 10000,
+  });
+  if (!shell) return;
+  const overlay = shell.overlay;
+  const close = shell.close;
 
   let selectedCount = 1; // default: rewind 1 action
-
-  const overlay = document.createElement('div');
-  overlay.id = 'rewind-overlay';
-  overlay.className = 'rewind-overlay';
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
 
   function render() {
     overlay.innerHTML = `
@@ -399,8 +439,8 @@ function openRewindPopup() {
     `;
 
     // Wire events
-    overlay.querySelector('#rewind-close').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#rewind-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#rewind-close').addEventListener('click', close);
+    overlay.querySelector('#rewind-cancel').addEventListener('click', close);
 
     overlay.querySelector('#rewind-slider').addEventListener('input', (e) => {
       selectedCount = parseInt(e.target.value);
@@ -416,22 +456,22 @@ function openRewindPopup() {
     });
 
     overlay.querySelector('#rewind-go').addEventListener('click', () => {
-      overlay.remove();
+      close();
       showRewindConfirmation(selectedCount);
     });
   }
 
   render();
-  document.body.appendChild(overlay);
 }
 
 function showRewindConfirmation(count) {
   const entries = REWIND.stack.slice(0, count);
-  const overlay = document.createElement('div');
-  overlay.className = 'rewind-overlay';
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+  const shell = createPopupShell({
+    overlayClass: 'rewind-overlay',
+    zIndex: 10000,
   });
+  const overlay = shell.overlay;
+  const close = shell.close;
 
   overlay.innerHTML = `
     <div class="rewind-confirm-popup" style="position:relative" onclick="event.stopPropagation()">
@@ -451,12 +491,10 @@ function showRewindConfirmation(count) {
     </div>
   `;
 
-  document.body.appendChild(overlay);
-
-  overlay.querySelector('#rewind-confirm-close').addEventListener('click', () => overlay.remove());
-  overlay.querySelector('#rewind-confirm-cancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#rewind-confirm-close').addEventListener('click', close);
+  overlay.querySelector('#rewind-confirm-cancel').addEventListener('click', close);
   overlay.querySelector('#rewind-confirm-go').addEventListener('click', () => {
-    overlay.remove();
+    close();
     rewindTo(count - 1);
   });
 }

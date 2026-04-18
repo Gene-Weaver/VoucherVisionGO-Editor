@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const { atomicWrite } = require('./util/file-utils');
+
 const INPROGRESS_DIR = '_INPROGRESS';
 const PROJECT_FILENAME = '_project.json';
 const LEASE_DURATION_MS = 5 * 60 * 1000; // 5-minute lease
@@ -16,14 +18,6 @@ function ensureInProgressDir(folderPath) {
     fs.mkdirSync(dir, { recursive: true });
   }
   return dir;
-}
-
-function atomicWrite(filePath, data) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmp, filePath);
 }
 
 /**

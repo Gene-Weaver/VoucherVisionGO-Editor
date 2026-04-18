@@ -192,8 +192,8 @@
   --error-tint-12: rgba(255, 82, 82, 0.12);
   --error-tint-35: rgba(255, 82, 82, 0.35);
 
-  /* Success-dim green tint */
-  --success-dim-tint-15: rgba(45, 122, 45, 0.15);
+  /* Header green tint */
+  --header-green-tint: rgba(45, 122, 45, 0.15);
 
   /* Black overlays / dimming */
   --dim-18: rgba(0,0,0,0.18);
@@ -1011,8 +1011,8 @@ textarea { resize: vertical; min-height: 60px; }
   grid-column: 1 / -1;
   font-size: var(--fs-11);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  text-transform: none;
+  letter-spacing: 0;
   margin-bottom: 2px;
   display: flex;
   align-items: center;
@@ -1201,7 +1201,7 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .field-reviewed input.resolved, .field-reviewed textarea.resolved {
-  background: var(--success-dim-tint-15);
+  background: var(--header-green-tint);
   border-color: var(--accent);
 }
 
@@ -1408,13 +1408,19 @@ textarea { resize: vertical; min-height: 60px; }
   align-items: center;
   justify-items: center;
   padding: 6px 10px;
-  background: var(--success-dim-tint-15);
+  background: var(--header-green-tint);
   border-bottom: 1px solid var(--accent);
   color: var(--text-secondary);
   font-size: var(--fs-11);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.image-viewer-header .slide-switch,
+.image-viewer-header .slide-switch-option {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
 }
 
 /* ── Sliding Switch (2 options) ─────────────────────────── */
@@ -1439,6 +1445,16 @@ textarea { resize: vertical; min-height: 60px; }
   white-space: nowrap;
   user-select: none;
   cursor: pointer;
+}
+
+#nav-view-toggle-inline #view-switch,
+#table-view-switch-container #table-view-switch,
+#focus-view-switch-container #focus-view-switch,
+#nav-view-toggle-inline #view-switch .slide-switch-option,
+#table-view-switch-container #table-view-switch .slide-switch-option,
+#focus-view-switch-container #focus-view-switch .slide-switch-option {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
 }
 
 .slide-switch-option.active {
@@ -1827,7 +1843,7 @@ textarea { resize: vertical; min-height: 60px; }
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: var(--success-dim-tint-15);
+  background: var(--header-green-tint);
   border-bottom: 1px solid var(--accent);
   color: var(--text-secondary);
   font-size: var(--fs-11);
@@ -2073,8 +2089,8 @@ textarea { resize: vertical; min-height: 60px; }
   padding: 6px 10px;
   text-align: left;
   font-size: var(--fs-10);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -3028,7 +3044,7 @@ textarea { resize: vertical; min-height: 60px; }
   cursor: default;
 }
 .focus-section-header-fixed:hover {
-  background: var(--success-dim-tint-15);
+  background: var(--header-green-tint);
 }
 
 /* Facet panel */
@@ -3255,15 +3271,28 @@ textarea { resize: vertical; min-height: 60px; }
   padding-right: 0;
 }
 
-.cluster-gallery-popup {
+/* ── Shared popup skin ──────────────────────────────────────
+   These 11 popup classes share the same base chrome (background,
+   border, rounded corners, vertical flex column). Common props
+   live in this multi-selector rule; per-popup sizing, padding,
+   and component-specific chrome stay in the per-class rules
+   below. See plan: Step 8c CSS consolidation. */
+.focus-review-popup,
+.rewind-popup, .rewind-confirm-popup,
+.checklist-popup, .hotkeys-popup, .find-popup, .settings-popup,
+.progress-tracker-popup, .cluster-gallery-popup, .vv-batch-popup,
+.name-parser-popup {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+}
+
+.cluster-gallery-popup {
   width: min(640px, calc(100vw - 32px));
   max-width: 96vw;
   max-height: 88vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -3273,12 +3302,66 @@ textarea { resize: vertical; min-height: 60px; }
   max-height: 90vh;
 }
 
+.focus-image-reference-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 10px 14px;
+  background: var(--header-green-tint);
+  border-bottom: 1px solid var(--accent);
+}
+
+.focus-image-reference-header-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: calc(100% - 132px);
+}
+
+.focus-image-reference-header-title {
+  min-width: 0;
+  text-align: center;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-image-reference-header-close {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+}
+
 .cluster-gallery-toggle {
   display: flex;
   justify-content: center;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-tertiary);
+}
+
+.focus-image-reference-popup .cluster-gallery-toggle {
+  background: var(--header-green-tint);
+  border-bottom: 1px solid var(--accent);
+}
+
+.focus-image-reference-header .slide-switch,
+.focus-image-reference-header .slide-switch-option {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
 }
 
 .focus-image-reference-meta {
@@ -3528,7 +3611,7 @@ textarea { resize: vertical; min-height: 60px; }
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  background: var(--success-dim-tint-15);
+  background: var(--header-green-tint);
   border-bottom: 1px solid var(--accent);
   color: var(--text-secondary);
   display: flex;
@@ -3751,14 +3834,9 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .focus-review-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: min(1280px, calc(100vw - 32px));
   max-width: 97vw;
   max-height: 90vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
   overflow: hidden;
 }
@@ -4639,13 +4717,17 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── Image Modal ───────────────────────────────────────── */
 
-.image-modal-overlay {
+.image-modal-overlay,
+.rewind-overlay {
   position: fixed;
   inset: 0;
-  background: var(--dim-85);
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.image-modal-overlay {
+  background: var(--dim-85);
   z-index: 1000;
   cursor: zoom-out;
 }
@@ -4722,15 +4804,10 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .checklist-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 0;
   max-width: 825px;
   width: 90%;
   max-height: 70vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -4815,28 +4892,18 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .hotkeys-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: min(980px, calc(100vw - 32px));
   max-width: 96vw;
   max-height: 78vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
   overflow: hidden;
 }
 
 /* Find popup */
 .find-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: min(1200px, calc(100vw - 48px));
   max-width: 96vw;
   max-height: 85vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
   overflow: hidden;
 }
@@ -5373,15 +5440,10 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .settings-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 24px;
   width: min(1000px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -5453,14 +5515,9 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .progress-tracker-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: min(1100px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: min(85vh, 900px);
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -5611,15 +5668,10 @@ textarea { resize: vertical; min-height: 60px; }
 /* ── Name Parser Popup ─────────────────────────────────── */
 
 .name-parser-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 0;
   width: 740px;
   max-width: 92vw;
   max-height: 85vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -6332,14 +6384,9 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .vv-batch-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: min(980px, calc(100vw - 32px));
   max-width: 96vw;
   max-height: 88vh;
-  display: flex;
-  flex-direction: column;
   cursor: default;
 }
 
@@ -7011,23 +7058,13 @@ textarea { resize: vertical; min-height: 60px; }
 }
 
 .rewind-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
   background: var(--dim-60);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   z-index: 10000;
 }
 
 .rewind-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   width: 720px;
   max-height: 80vh;
-  display: flex;
-  flex-direction: column;
   box-shadow: var(--shadow-lg);
 }
 
@@ -7211,9 +7248,6 @@ textarea { resize: vertical; min-height: 60px; }
 /* ── Rewind Confirmation Dialog ────────────────────────── */
 
 .rewind-confirm-popup {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 24px;
   max-width: 420px;
   box-shadow: var(--shadow-lg);
