@@ -314,6 +314,8 @@ function generateReviewed(original, inProgressData, username, editorVersion, pro
     fields_confirmed_empty: fieldsBy.confirmed_empty,
     flagged: inProgressData.flagged || false,
     flag_note: inProgressData.flag_note || '',
+    flag_tags: inProgressData.flag_tags || [],
+    escalation_tags: inProgressData.escalation_tags || [],
   };
 
   return reviewed;

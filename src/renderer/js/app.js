@@ -248,7 +248,7 @@ function updateNavBar() {
         </div>
         <span class="progress-text">${stats.percentage}%</span>
       </div>
-      ${stats.flagged > 0 ? `<span class="text-error flagged-count-link" id="btn-view-flagged" title="View flagged specimens">${stats.flagged} flagged <img src="icons/view.svg" alt="" aria-hidden="true"></span>` : ''}
+      ${stats.flagged > 0 ? `<button class="btn-sm btn-flagged-nav" id="btn-view-flagged" title="View flagged specimens">${flagIconSvg(true, 12)}<span>${stats.flagged} flagged</span>${sharedAssetIconHtml('shared-asset-icon-gem', 11, 'nav-flagged-gem')}</button>` : ''}
     `;
 
     const hasChecklist = APP.currentPrompt?.checklist?.length > 0;
@@ -1272,8 +1272,8 @@ function renderReviewView() {
   });
   const formFlagBtn = document.getElementById('btn-flag');
   formFlagBtn.addEventListener('click', (e) => {
-    // Let inner tag.svg button handle its own click
-    if (e.target.closest('.flag-tag-btn')) return;
+    // Let accessory controls manage their own interactions
+    if (isFlagAccessoryInteraction(e.target)) return;
     toggleFlag();
   });
   const currentSpec = APP.specimens[APP.currentIndex];
@@ -3697,7 +3697,7 @@ async function doExport(strategy, incomplete) {
 function toggleSpecimenFlagState(spec, options = {}) {
   if (!spec) return false;
   if (!APP.state.specimens[spec.filename]) initSpecimenState(spec.filename);
-  const specState = APP.state.specimens[spec.filename];
+  const specState = ensureSpecimenFlagStateDefaults(APP.state.specimens[spec.filename]);
   if (!specState) return false;
 
   const {
@@ -3719,32 +3719,36 @@ function toggleSpecimenFlagState(spec, options = {}) {
 
   if (!specState.flagged) {
     // Unflagged → flag + add this tool's tag (if tool provided)
-    specState.flagged = true;
     if (tool) addTagToSpecimen(spec.filename, tool);
+    specState.flagged = true;
     didFlag = true;
   } else if (tool) {
     // Already flagged + tool context: behave like the tag.svg toggle.
     // Nuclear reset (full unflag) only if this action would leave zero tags.
     const tags = specState.flag_tags || [];
     if (tags.includes(tool)) {
-      if (tags.length <= 1) {
-        // Only this tool's tag (or none) → nuclear reset
+      if (tags.length <= 1 && (specState.escalation_tags || []).length === 0 && !String(specState.flag_note || '').trim()) {
+        // Only this tool's tag → nuclear reset when no other flag state exists
         specState.flagged = false;
         specState.flag_tags = [];
+        specState.escalation_tags = [];
         specState.flag_note = '';
         didUnflag = true;
       } else {
-        // Other tags remain → remove just this tool's tag, stay flagged
+        // Other flag state remains → remove just this tool's tag
         removeTagFromSpecimen(spec.filename, tool);
+        syncSpecimenFlaggedState(spec.filename);
       }
     } else {
       // This tool's tag not present → add it (specimen stays flagged)
       addTagToSpecimen(spec.filename, tool);
+      specState.flagged = true;
     }
   } else {
     // No tool context (e.g. Clear Specimen Flags) → nuclear reset
     specState.flagged = false;
     specState.flag_tags = [];
+    specState.escalation_tags = [];
     specState.flag_note = '';
     didUnflag = true;
   }
@@ -3797,43 +3801,17 @@ function renderFormFlagFlair() {
   if (!container) return;
   const spec = APP.specimens[APP.currentIndex];
   if (!spec) { container.innerHTML = ''; return; }
-  const tags = getSpecimenTags(spec.filename);
-  container.innerHTML = tags.map(t => {
-    const label = FLAG_TOOL_LABELS[t] || t;
-    return `<span class="flag-tag-pill flag-tag-pill-sm">${escapeHtml(label)}<button class="flag-tag-pill-x" data-file="${escapeAttr(spec.filename)}" data-tool="${escapeAttr(t)}" title="Remove ${escapeAttr(label)} tag"><img src="icons/close.svg" alt="×"></button></span>`;
-  }).join('');
+  container.innerHTML = getSpecimenFlairItems(spec.filename)
+    .map(item => renderFlagFlairPillHtml(spec.filename, item, { small: true }))
+    .join('');
 
-  // Wire X buttons — remove that tag. If it was the last tag, also unflag.
-  container.querySelectorAll('.flag-tag-pill-x').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const filename = btn.dataset.file;
-      const tool = btn.dataset.tool;
-      const st = APP.state.specimens?.[filename];
-      if (!st) return;
-      withRewind({
-        action: 'tagFlag', label: 'Remove Flag Tag',
-        summary: `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`,
-        filenames: [filename], opts: { flagged: true },
-      }, () => {
-        removeTagFromSpecimen(filename, tool);
-        // If no tags remain, auto-unflag (nuclear reset for this specimen)
-        if ((st.flag_tags || []).length === 0) {
-          st.flagged = false;
-          st.flag_note = '';
-        }
-        st.last_touched = new Date().toISOString();
-      });
-      scheduleSaveState(filename);
-      updateNavBar();
-      updateFormFlagButtonUi(!!st.flagged);
-      // Also clear the flag note input when unflagged
-      if (!st.flagged) {
-        const input = document.getElementById('flag-note-input');
-        if (input) input.value = '';
-      }
-    });
+  wireFlagFlairPillButtons(container, () => {
+    const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[spec.filename]);
+    updateFormFlagButtonUi(!!st?.flagged);
+    if (!st?.flagged) {
+      const input = document.getElementById('flag-note-input');
+      if (input) input.value = '';
+    }
   });
 }
 
@@ -4417,6 +4395,7 @@ let tableAllFields = [];        // Cached field list for keyboard nav
 let _tableSavedScroll = null;   // { scrollTop, scrollLeft } preserved across view switches
 let focusThumbSize = 52;
 let _tableAutoColumnWidths = null;
+const TABLE_FLAG_COLUMN_WIDTH = 90;
 
 function getTableColumnKeyByIndex(index, allFields = tableAllFields) {
   if (index === 0) return '__goto';
@@ -4470,7 +4449,7 @@ function getTableMeasureFonts() {
 
 function getTableColumnClampRange(key) {
   if (key === '__goto') return { min: 30, max: 30 };
-  if (key === '__flag') return { min: 66, max: 66 };
+  if (key === '__flag') return { min: TABLE_FLAG_COLUMN_WIDTH, max: TABLE_FLAG_COLUMN_WIDTH };
   if (key === 'index') return { min: 56, max: 72 };
   if (key === 'filename') return { min: 180, max: 280 };
   if (key === 'status') return { min: 124, max: 156 };
@@ -4572,7 +4551,7 @@ async function renderTableView() {
             <thead>
               <tr>
                 <th style="width:30px"></th>
-                <th style="width:66px"></th>
+                <th style="width:${TABLE_FLAG_COLUMN_WIDTH}px"></th>
                 <th data-sort="index">#</th>
                 <th data-sort="filename">Filename</th>
                 <th data-sort="status">Status</th>
@@ -4898,8 +4877,8 @@ function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
   // Flag column click handler
   tbody.querySelectorAll('.cell-flag .focus-flag').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      // Let inner tag.svg button handle its own click
-      if (e.target.closest('.flag-tag-btn')) return;
+      // Let accessory controls manage their own interactions
+      if (isFlagAccessoryInteraction(e.target)) return;
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const spec = APP.specimens[idx];
@@ -4912,10 +4891,10 @@ function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
           btn.title = isFlagged ? 'Unflag specimen' : 'Flag specimen';
         }
       });
-      wireTagIconButtons(tbody);
+      wireTagIconButtons(tbody, () => renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc));
     });
   });
-  wireTagIconButtons(tbody);
+  wireTagIconButtons(tbody, () => renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc));
 
   // Single click: select cell (when locked) or expand+edit (when unlocked)
   tbody.querySelectorAll('td[data-field]').forEach(td => {
@@ -6071,6 +6050,10 @@ function flagIconSvg(isFlagged, size = 14) {
   return sharedAssetIconHtml(isFlagged ? 'shared-asset-icon-flag-filled' : 'shared-asset-icon-flag', size);
 }
 
+function gemIconSvg(size = 11) {
+  return sharedAssetIconHtml('shared-asset-icon-gem', size);
+}
+
 // ── Flag Tags (Tool Attribution) ────────────────────────────
 
 // Tool context keys used by the flag tag system. 'form' is the only one that
@@ -6091,7 +6074,28 @@ const FLAG_TOOL_LABELS = {
   find: 'Find',
 };
 
+const ESCALATION_STATUS_LABELS = {
+  type: 'Type',
+  exsiccatae: 'Exsiccatae',
+  photograph: 'Photograph',
+  multiple: 'Multiple',
+  filename_catalog_mismatch: 'Filename/catalog mismatch',
+  barcode: 'Barcode',
+  bad_image: 'Bad Image',
+};
+
+const ESCALATION_STATUS_ORDER = [
+  'type',
+  'exsiccatae',
+  'photograph',
+  'multiple',
+  'filename_catalog_mismatch',
+  'barcode',
+  'bad_image',
+];
+
 function getSpecimenTags(filename) {
+  ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
   return APP.state.specimens?.[filename]?.flag_tags || [];
 }
 
@@ -6103,20 +6107,143 @@ function specimenHasTagForTool(filename, tool) {
 function addTagToSpecimen(filename, tool) {
   if (!tool) return;
   if (!APP.state.specimens[filename]) initSpecimenState(filename);
-  const st = APP.state.specimens[filename];
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
   if (!st.flag_tags) st.flag_tags = [];
   if (!st.flag_tags.includes(tool)) st.flag_tags.push(tool);
 }
 
 function removeTagFromSpecimen(filename, tool) {
-  const st = APP.state.specimens?.[filename];
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
   if (!st?.flag_tags) return;
   st.flag_tags = st.flag_tags.filter(t => t !== tool);
+}
+
+function getSpecimenEscalations(filename) {
+  ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
+  return APP.state.specimens?.[filename]?.escalation_tags || [];
+}
+
+function specimenHasEscalation(filename, escalation) {
+  if (!escalation) return false;
+  return getSpecimenEscalations(filename).includes(escalation);
+}
+
+function addEscalationToSpecimen(filename, escalation) {
+  if (!escalation) return;
+  if (!APP.state.specimens[filename]) initSpecimenState(filename);
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
+  if (!st.escalation_tags.includes(escalation)) st.escalation_tags.push(escalation);
+}
+
+function removeEscalationFromSpecimen(filename, escalation) {
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
+  if (!st?.escalation_tags) return;
+  st.escalation_tags = st.escalation_tags.filter(tag => tag !== escalation);
+}
+
+function syncSpecimenFlaggedState(filename) {
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
+  if (!st) return false;
+  st.flagged = shouldSpecimenBeFlagged(st);
+  return st.flagged;
+}
+
+function getFlagFlairLabel(kind, key) {
+  return kind === 'escalation'
+    ? (ESCALATION_STATUS_LABELS[key] || key)
+    : (FLAG_TOOL_LABELS[key] || key);
+}
+
+function getSpecimenFlairItems(filename) {
+  return [
+    ...getSpecimenTags(filename).map(key => ({ kind: 'tool', key, label: getFlagFlairLabel('tool', key) })),
+    ...getSpecimenEscalations(filename).map(key => ({ kind: 'escalation', key, label: getFlagFlairLabel('escalation', key) })),
+  ];
+}
+
+function renderFlagFlairPillHtml(filename, item, { small = false } = {}) {
+  const classes = [
+    'flag-tag-pill',
+    small ? 'flag-tag-pill-sm' : '',
+    item.kind === 'escalation' ? 'flag-tag-pill-escalation' : '',
+  ].filter(Boolean).join(' ');
+  const title = `Remove ${item.label}`;
+  return `<span class="${classes}">${escapeHtml(item.label)}<button class="flag-tag-pill-x" data-file="${escapeAttr(filename)}" data-kind="${escapeAttr(item.kind)}" data-key="${escapeAttr(item.key)}" title="${escapeAttr(title)}"><img src="icons/close.svg" alt="×"></button></span>`;
+}
+
+function removeFlairItemFromSpecimen(filename, kind, key) {
+  if (kind === 'escalation') removeEscalationFromSpecimen(filename, key);
+  else removeTagFromSpecimen(filename, key);
+  return syncSpecimenFlaggedState(filename);
+}
+
+function wireFlagFlairPillButtons(container, onRefresh = () => {}) {
+  container.querySelectorAll('.flag-tag-pill-x').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const filename = btn.dataset.file;
+      const kind = btn.dataset.kind || 'tool';
+      const key = btn.dataset.key || '';
+      const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
+      if (!st || !key) return;
+      const label = getFlagFlairLabel(kind, key);
+      withRewind({
+        action: kind === 'escalation' ? 'tagEscalation' : 'tagFlag',
+        label: kind === 'escalation' ? 'Remove Escalation' : 'Remove Flag Tag',
+        summary: `Removed ${label} from ${getDisplayFilename(filename)}`,
+        filenames: [filename], opts: { flagged: true },
+      }, () => {
+        removeFlairItemFromSpecimen(filename, kind, key);
+        st.last_touched = new Date().toISOString();
+      });
+      scheduleSaveState(filename);
+      updateNavBar();
+      onRefresh(filename);
+    });
+  });
 }
 
 // Shared-asset tag indicator. Uses currentColor through CSS masks.
 function tagIconSvg(size = 11) {
   return sharedAssetIconHtml('shared-asset-icon-tag', size);
+}
+
+function renderEscalationMenuItemsHtml(filename) {
+  const escalations = new Set(getSpecimenEscalations(filename));
+  return ESCALATION_STATUS_ORDER.map((key) => {
+    const active = escalations.has(key);
+    return `
+      <span
+        role="menuitemcheckbox"
+        tabindex="0"
+        aria-checked="${active ? 'true' : 'false'}"
+        class="flag-escalation-item ${active ? 'active' : ''}"
+        data-file="${escapeAttr(filename)}"
+        data-escalation="${escapeAttr(key)}">
+        <span class="flag-escalation-check" aria-hidden="true">${active ? '&#10003;' : ''}</span>
+        <span class="flag-escalation-label">${escapeHtml(ESCALATION_STATUS_LABELS[key])}</span>
+      </span>
+    `;
+  }).join('');
+}
+
+function escalationMenuHtml(filename, size = 11, tool = null) {
+  const escalations = new Set(getSpecimenEscalations(filename));
+  const isActive = escalations.size > 0;
+  const btnClass = isActive ? 'flag-escalation-btn-active' : 'flag-escalation-btn-inactive';
+  const title = isActive ? 'Manage escalation statuses' : 'Add escalation status';
+  const menuMode = tool === 'table' ? 'popup' : 'inline';
+  return `
+    <span class="flag-escalation-wrap" data-menu-mode="${escapeAttr(menuMode)}">
+      <span role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" class="flag-escalation-btn ${btnClass}" data-file="${escapeAttr(filename)}" data-tool="${escapeAttr(tool || '')}" data-menu-mode="${escapeAttr(menuMode)}" title="${escapeAttr(title)}">${gemIconSvg(size)}</span>
+      ${menuMode === 'inline' ? `<span class="flag-escalation-menu" role="menu" aria-label="Escalation statuses">${renderEscalationMenuItemsHtml(filename)}</span>` : ''}
+    </span>
+  `;
+}
+
+function isFlagAccessoryInteraction(target) {
+  return !!target?.closest('.flag-tag-btn, .flag-escalation-wrap, .flag-escalation-btn, .flag-escalation-menu, .flag-escalation-item');
 }
 
 // Returns combined HTML: the flag icon plus an adjacent slot for the tag.svg
@@ -6127,10 +6254,11 @@ function flagAndTagHtml(filename, flagSize = 12, tool = null) {
   const isFlagged = !!APP.state.specimens?.[filename]?.flagged;
   const flagHtml = flagIconSvg(isFlagged, flagSize);
   const iconSize = Math.max(flagSize - 1, 10);
+  const escalationHtml = escalationMenuHtml(filename, iconSize, tool);
 
   if (!tool || !isFlagged) {
     // Invisible placeholder to preserve layout spacing
-    return `${flagHtml}<span class="flag-tag-btn flag-tag-btn-placeholder" aria-hidden="true">${tagIconSvg(iconSize)}</span>`;
+    return `${flagHtml}<span class="flag-tag-btn flag-tag-btn-placeholder" aria-hidden="true">${tagIconSvg(iconSize)}</span>${escalationHtml}`;
   }
 
   const hasMine = specimenHasTagForTool(filename, tool);
@@ -6140,7 +6268,180 @@ function flagAndTagHtml(filename, flagSize = 12, tool = null) {
   // Use a <span role="button"> (not <button>) so it can be safely nested
   // inside other <button> elements without being relocated by the parser.
   const btn = `<span role="button" tabindex="0" class="flag-tag-btn ${colorClass}" data-file="${escapeAttr(filename)}" data-tool="${escapeAttr(tool)}" title="${escapeAttr(title)}">${tagIconSvg(iconSize)}</span>`;
-  return `${flagHtml}${btn}`;
+  return `${flagHtml}${btn}${escalationHtml}`;
+}
+
+let _openInlineEscalationWrap = null;
+const ESCALATION_POPUP_OVERLAY_ID = 'flag-escalation-popup-overlay';
+
+function setEscalationButtonExpanded(btn, isOpen) {
+  if (!btn) return;
+  btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+
+function closeInlineEscalationMenus(exceptWrap = null) {
+  document.querySelectorAll('.flag-escalation-wrap.is-open').forEach((wrap) => {
+    if (wrap === exceptWrap) return;
+    wrap.classList.remove('is-open');
+    setEscalationButtonExpanded(wrap.querySelector('.flag-escalation-btn'), false);
+  });
+  if (exceptWrap?.isConnected && exceptWrap.classList.contains('is-open')) {
+    _openInlineEscalationWrap = exceptWrap;
+  } else {
+    _openInlineEscalationWrap = null;
+  }
+}
+
+function openInlineEscalationMenu(wrap) {
+  if (!wrap) return;
+  closeInlineEscalationMenus(wrap);
+  wrap.classList.add('is-open');
+  _openInlineEscalationWrap = wrap;
+  setEscalationButtonExpanded(wrap.querySelector('.flag-escalation-btn'), true);
+}
+
+function closeEscalationPopup() {
+  closePopupById(ESCALATION_POPUP_OVERLAY_ID);
+}
+
+function isTableEscalationButton(btn) {
+  if (!btn) return false;
+  return btn.dataset.menuMode === 'popup' || btn.dataset.tool === 'table' || !!btn.closest('.cell-flag');
+}
+
+function getEscalationButtonKey(btn) {
+  return `${btn?.dataset?.file || ''}::${btn?.dataset?.tool || ''}::${btn?.dataset?.menuMode || ''}`;
+}
+
+function findEscalationButton(filename, tool = '', menuMode = '') {
+  return Array.from(document.querySelectorAll('.flag-escalation-btn[data-file]')).find((btn) => (
+    btn.dataset.file === filename
+    && (tool === '' || (btn.dataset.tool || '') === tool)
+    && (menuMode === '' || (btn.dataset.menuMode || '') === menuMode)
+  )) || null;
+}
+
+function positionEscalationPopupMenu(menu, anchorEl) {
+  if (!menu || !anchorEl) return;
+  const rect = anchorEl.getBoundingClientRect();
+  const margin = 8;
+  const gap = 6;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  menu.style.visibility = 'hidden';
+  const menuWidth = menu.offsetWidth || 198;
+  const menuHeight = menu.offsetHeight || 0;
+  let left = rect.left - 6;
+  left = Math.max(margin, Math.min(left, viewportWidth - menuWidth - margin));
+  let top = rect.bottom + gap;
+  const maxTop = viewportHeight - menuHeight - margin;
+  if (menuHeight && top > maxTop) {
+    top = Math.max(margin, rect.top - menuHeight - gap);
+  }
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+  menu.style.visibility = '';
+}
+
+function buildEscalationPopupMenuHtml(filename) {
+  return `<div class="flag-escalation-popup-menu" role="menu" aria-label="Escalation statuses">${renderEscalationMenuItemsHtml(filename)}</div>`;
+}
+
+function openTableEscalationPopup(sourceBtn, onRefresh = () => {}) {
+  if (!sourceBtn) return;
+  const filename = sourceBtn.dataset.file;
+  if (!filename) return;
+  const anchorKey = getEscalationButtonKey(sourceBtn);
+  const existing = document.getElementById(ESCALATION_POPUP_OVERLAY_ID);
+  if (existing) {
+    const sameAnchor = existing.dataset.anchorKey === anchorKey;
+    closePopupElement(existing);
+    if (sameAnchor) return;
+  }
+  const scrollParent = sourceBtn.closest('.batch-table-wrapper');
+  const sourceTool = sourceBtn.dataset.tool || '';
+  const sourceMode = sourceBtn.dataset.menuMode || '';
+  const shell = createPopupShell({
+    overlayId: ESCALATION_POPUP_OVERLAY_ID,
+    overlayClass: 'flag-escalation-popup-overlay',
+    dismissOnOutsideClick: true,
+    onEscape: true,
+    zIndex: 10020,
+    onClose: () => {
+      const liveBtn = findEscalationButton(filename, sourceTool, sourceMode);
+      setEscalationButtonExpanded(liveBtn || sourceBtn, false);
+      window.removeEventListener('resize', handleViewportChange);
+      scrollParent?.removeEventListener('scroll', handleViewportChange);
+    },
+  });
+  if (!shell) return;
+
+  const handleViewportChange = () => closePopupElement(shell.overlay);
+  shell.overlay.dataset.anchorKey = anchorKey;
+  shell.overlay.innerHTML = buildEscalationPopupMenuHtml(filename);
+  const renderMenu = () => {
+    shell.overlay.innerHTML = buildEscalationPopupMenuHtml(filename);
+    const menu = shell.overlay.querySelector('.flag-escalation-popup-menu');
+    const liveBtn = findEscalationButton(filename, sourceTool, sourceMode);
+    setEscalationButtonExpanded(liveBtn || sourceBtn, true);
+    positionEscalationPopupMenu(menu, liveBtn || sourceBtn);
+    menu.querySelectorAll('.flag-escalation-item[data-file][data-escalation]').forEach((item) => {
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleEscalationStatus(item.dataset.file, item.dataset.escalation);
+        onRefresh(item.dataset.file);
+        renderMenu();
+      };
+      item.addEventListener('click', handler);
+      item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') handler(e);
+      });
+    });
+  };
+
+  renderMenu();
+  setEscalationButtonExpanded(sourceBtn, true);
+  window.addEventListener('resize', handleViewportChange);
+  scrollParent?.addEventListener('scroll', handleViewportChange, { passive: true });
+}
+
+function toggleEscalationStatus(filename, escalation) {
+  if (!filename || !escalation) return;
+  if (!APP.state.specimens[filename]) initSpecimenState(filename);
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
+  const label = ESCALATION_STATUS_LABELS[escalation] || escalation;
+  const wasActive = specimenHasEscalation(filename, escalation);
+  withRewind({
+    action: 'tagEscalation',
+    label: wasActive ? 'Remove Escalation' : 'Add Escalation',
+    summary: `${wasActive ? 'Removed' : 'Added'} ${label} on ${getDisplayFilename(filename)}`,
+    filenames: [filename],
+    opts: { flagged: true },
+  }, () => {
+    if (wasActive) removeEscalationFromSpecimen(filename, escalation);
+    else addEscalationToSpecimen(filename, escalation);
+    syncSpecimenFlaggedState(filename);
+    st.last_touched = new Date().toISOString();
+  });
+  scheduleSaveState(filename);
+  updateNavBar();
+}
+
+if (typeof document !== 'undefined' && !document.__vvgoInlineEscalationMenusInstalled) {
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.flag-escalation-wrap')) return;
+    closeInlineEscalationMenus();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !_openInlineEscalationWrap) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeInlineEscalationMenus();
+  });
+  document.__vvgoInlineEscalationMenusInstalled = true;
 }
 
 // Stack of currently-open popups, topmost last. Global Escape handler
@@ -10792,8 +11093,8 @@ function renderPopupFlagButton(filename, tool = null) {
 function wirePopupFlagButtons(container, onRefresh = () => {}) {
   container.querySelectorAll('.ocr-review-flag[data-file]').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      // If click landed on the inner tag.svg button, let wireTagIconButtons handle it
-      if (e.target.closest('.flag-tag-btn')) return;
+      // If click landed on an accessory control, let it handle the event
+      if (isFlagAccessoryInteraction(e.target)) return;
       e.preventDefault();
       e.stopPropagation();
       const filename = btn.dataset.file;
@@ -10825,7 +11126,7 @@ function wireTagIconButtons(container, onRefresh = () => {}) {
       const filename = btn.dataset.file;
       const tool = btn.dataset.tool;
       if (!APP.state.specimens[filename]) initSpecimenState(filename);
-      const st = APP.state.specimens[filename];
+      const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
       if (!st.flagged) return;
 
       withRewind({
@@ -10835,18 +11136,61 @@ function wireTagIconButtons(container, onRefresh = () => {}) {
       }, () => {
         if (specimenHasTagForTool(filename, tool)) {
           removeTagFromSpecimen(filename, tool);
-          if ((st.flag_tags || []).length === 0) {
-            st.flagged = false;
-            st.flag_note = '';
-          }
         } else {
           addTagToSpecimen(filename, tool);
         }
+        syncSpecimenFlaggedState(filename);
         st.last_touched = new Date().toISOString();
       });
       scheduleSaveState(filename);
       updateNavBar();
-      onRefresh();
+      onRefresh(filename);
+    });
+  });
+
+  wireEscalationButtons(container, onRefresh);
+}
+
+function wireEscalationButtons(container, onRefresh = () => {}) {
+  container.querySelectorAll('.flag-escalation-btn[data-file]').forEach(btn => {
+    const activate = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isTableEscalationButton(btn)) {
+        closeInlineEscalationMenus();
+        openTableEscalationPopup(btn, onRefresh);
+        return;
+      }
+      closeEscalationPopup();
+      const wrap = btn.closest('.flag-escalation-wrap');
+      const isOpen = !!wrap?.classList.contains('is-open');
+      if (isOpen) {
+        closeInlineEscalationMenus();
+      } else {
+        openInlineEscalationMenu(wrap);
+      }
+    };
+    btn.addEventListener('click', activate);
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') activate(e);
+    });
+  });
+
+  container.querySelectorAll('.flag-escalation-item[data-file][data-escalation]').forEach(item => {
+    const handler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleEscalationStatus(item.dataset.file, item.dataset.escalation);
+      closeInlineEscalationMenus();
+      onRefresh(item.dataset.file);
+    };
+    item.addEventListener('click', handler);
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') handler(e);
     });
   });
 }
@@ -12837,8 +13181,8 @@ function renderFocusSpecimens(cachedFieldValues) {
 
   list.querySelectorAll('.focus-flag').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      // Let inner tag.svg button handle its own click
-      if (e.target.closest('.flag-tag-btn')) return;
+      // Let accessory controls manage their own interactions
+      if (isFlagAccessoryInteraction(e.target)) return;
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const spec = APP.specimens[idx];
@@ -13798,13 +14142,13 @@ function openFlaggedSpecimensPopup() {
     const flagged = [];
     for (let i = 0; i < APP.specimens.length; i++) {
       const spec = APP.specimens[i];
-      const st = APP.state.specimens?.[spec.filename];
+      const st = ensureSpecimenFlagStateDefaults(APP.state.specimens?.[spec.filename]);
       if (st?.flagged) {
         flagged.push({
           index: i,
           filename: spec.filename,
           note: st.flag_note || '',
-          tags: [...(st.flag_tags || [])],
+          items: getSpecimenFlairItems(spec.filename),
         });
       }
     }
@@ -13813,11 +14157,6 @@ function openFlaggedSpecimensPopup() {
 
   const eyeSvgHtml = sharedAssetIconHtml('shared-asset-icon-eye', 16);
 
-  const renderPill = (filename, tool) => {
-    const label = FLAG_TOOL_LABELS[tool] || tool;
-    return `<span class="flag-tag-pill">${escapeHtml(label)}<button class="flag-tag-pill-x" data-file="${escapeAttr(filename)}" data-tool="${escapeAttr(tool)}" title="Remove ${escapeAttr(label)} tag"><img src="icons/close.svg" alt="×"></button></span>`;
-  };
-
   const renderRows = () => {
     const flagged = collectFlagged();
     if (flagged.length === 0) return { html: '', count: 0 };
@@ -13825,7 +14164,7 @@ function openFlaggedSpecimensPopup() {
       <div class="flagged-popup-row" data-index="${f.index}" data-file="${escapeAttr(f.filename)}">
         <div class="flagged-popup-row-content">
           <span class="flagged-popup-row-filename">${escapeHtml(getDisplayFilename(f.filename))}</span>
-          ${f.tags.length > 0 ? `<div class="flagged-popup-row-tags">${f.tags.map(t => renderPill(f.filename, t)).join('')}</div>` : ''}
+          ${f.items.length > 0 ? `<div class="flagged-popup-row-tags">${f.items.map(item => renderFlagFlairPillHtml(f.filename, item)).join('')}</div>` : ''}
           ${f.note ? `<span class="flagged-popup-row-note">${escapeHtml(f.note)}</span>` : ''}
         </div>
         <div class="flagged-popup-row-actions">
@@ -13860,7 +14199,12 @@ function openFlaggedSpecimensPopup() {
             Flagged by another tool
           </span>
           <span class="flagged-popup-key-sep">&middot;</span>
-          <span class="flagged-popup-key-note">Toggling inside a tool only affects that tool\u2019s tag. Use this popup to clear all tags.</span>
+          <span class="flagged-popup-key-item" style="color:var(--accent-escalation)">
+            ${sharedAssetIconHtml('shared-asset-icon-gem', 11)}
+            Escalation status
+          </span>
+          <span class="flagged-popup-key-sep">&middot;</span>
+          <span class="flagged-popup-key-note">Tool tags and escalation statuses can both be cleared here. The gem menus inside the reviewer surfaces manage specimen-specific escalations.</span>
         </div>
         <div class="flagged-popup-list" style="overflow-y:auto;flex:1;min-height:0">
           ${html}
@@ -13875,31 +14219,9 @@ function openFlaggedSpecimensPopup() {
   const wireRowHandlers = () => {
     overlay.querySelector('#flagged-popup-close')?.addEventListener('click', close);
 
-    // Pill X: remove just that tag. If it was the last tag, also unflag.
-    overlay.querySelectorAll('.flag-tag-pill-x').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const filename = btn.dataset.file;
-        const tool = btn.dataset.tool;
-        const st = APP.state.specimens?.[filename];
-        if (!st) return;
-        withRewind({
-          action: 'tagFlag', label: 'Remove Flag Tag',
-          summary: `Removed ${FLAG_TOOL_LABELS[tool] || tool} tag from ${getDisplayFilename(filename)}`,
-          filenames: [filename], opts: { flagged: true },
-        }, () => {
-          removeTagFromSpecimen(filename, tool);
-          if ((st.flag_tags || []).length === 0) {
-            st.flagged = false;
-            st.flag_note = '';
-          }
-          st.last_touched = new Date().toISOString();
-        });
-        scheduleSaveState(filename);
-        refreshSpecimenFlagUi(filename);
-        render();
-      });
+    wireFlagFlairPillButtons(overlay, (filename) => {
+      if (filename) refreshSpecimenFlagUi(filename);
+      render();
     });
 
     // Clear Specimen Flags: nuclear reset
@@ -14209,8 +14531,8 @@ function renderFindResults(body, summary, query, fieldRestriction) {
   // Wire flag toggle
   body.querySelectorAll('.focus-flag').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      // Let inner tag.svg button handle its own click
-      if (e.target.closest('.flag-tag-btn')) return;
+      // Let accessory controls manage their own interactions
+      if (isFlagAccessoryInteraction(e.target)) return;
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const spec = APP.specimens[idx];
@@ -14223,11 +14545,11 @@ function renderFindResults(body, summary, query, fieldRestriction) {
           btn.title = isFlagged ? 'Unflag specimen' : 'Flag specimen';
         }
       });
-      wireTagIconButtons(body);
+      wireTagIconButtons(body, () => renderFindResults(body, summary, input.value, fieldSelect.value));
     });
   });
 
-  wireTagIconButtons(body);
+  wireTagIconButtons(body, () => renderFindResults(body, summary, input.value, fieldSelect.value));
 
   // Wire expand/collapse on match cells
   body.querySelectorAll('.find-match-expand-btn').forEach(btn => {

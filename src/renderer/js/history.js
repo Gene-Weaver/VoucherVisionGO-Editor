@@ -30,6 +30,7 @@ function rewindCapture(filenames, fields, options = {}) {
       flagged: false,
       flag_note: '',
       flag_tags: [],
+      escalation_tags: [],
     };
 
     const snap = { accepted_fields: {}, unconfirmed_fields: {} };
@@ -51,6 +52,7 @@ function rewindCapture(filenames, fields, options = {}) {
       snap.flagged = st.flagged || false;
       snap.flag_note = st.flag_note || '';
       snap.flag_tags = [...(st.flag_tags || [])];
+      snap.escalation_tags = [...(st.escalation_tags || [])];
     }
 
     snapshot[fn] = snap;
@@ -118,13 +120,18 @@ function rewindRecord(action, label, summary, beforeSnapshot) {
     // Diff flagged
     if (before.flagged !== undefined) {
       const newTags = [...(st.flag_tags || [])];
+      const newEscalations = [...(st.escalation_tags || [])];
       const oldTagsStr = JSON.stringify([...(before.flag_tags || [])].sort());
       const newTagsStr = JSON.stringify([...newTags].sort());
+      const oldEscalationsStr = JSON.stringify([...(before.escalation_tags || [])].sort());
+      const newEscalationsStr = JSON.stringify([...newEscalations].sort());
       const tagsChanged = oldTagsStr !== newTagsStr;
-      if (before.flagged !== st.flagged || before.flag_note !== (st.flag_note || '') || tagsChanged) {
+      const escalationsChanged = oldEscalationsStr !== newEscalationsStr;
+      if (before.flagged !== st.flagged || before.flag_note !== (st.flag_note || '') || tagsChanged || escalationsChanged) {
         specDiff.flagged = { old: before.flagged, new: st.flagged || false };
         specDiff.flag_note = { old: before.flag_note, new: st.flag_note || '' };
         specDiff.flag_tags = { old: [...(before.flag_tags || [])], new: newTags };
+        specDiff.escalation_tags = { old: [...(before.escalation_tags || [])], new: newEscalations };
       }
     }
 
@@ -256,6 +263,7 @@ function applyDiffReverse(entry) {
       st.flagged = specDiff.flagged.old;
       st.flag_note = specDiff.flag_note.old;
       if (specDiff.flag_tags) st.flag_tags = [...specDiff.flag_tags.old];
+      if (specDiff.escalation_tags) st.escalation_tags = [...specDiff.escalation_tags.old];
     }
 
     st.last_touched = new Date().toISOString();
@@ -310,14 +318,8 @@ function reRenderCurrentView() {
       renderCategoryForm();
       renderCategoryFooter();
       renderBounceBar();
-      // Update flag button (it lives in the review nav, not in the sub-renders)
       const spec = APP.specimens[APP.currentIndex];
-      const specState = spec ? APP.state.specimens[spec.filename] : null;
-      const flagBtn = document.getElementById('btn-flag');
-      if (flagBtn && specState) {
-        flagBtn.classList.toggle('flagged', specState.flagged);
-        flagBtn.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px">${flagIconSvg(specState.flagged)} ${specState.flagged ? 'Flagged' : 'Flag'}</span>`;
-      }
+      if (spec) updateFormFlagButtonUi(!!APP.state.specimens?.[spec.filename]?.flagged);
       break;
     case 'table':
       renderTableView();

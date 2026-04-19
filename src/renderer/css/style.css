@@ -301,6 +301,33 @@ html, body {
   filter: brightness(0) saturate(100%) invert(37%) sepia(74%) saturate(1800%) hue-rotate(331deg) brightness(96%) contrast(97%);
 }
 
+.btn-flagged-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  color: var(--error);
+  border: 1px solid var(--error);
+  font-size: var(--fs-11);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-flagged-nav:hover {
+  background: var(--error-tint-12);
+  border-color: var(--error);
+}
+
+.btn-flagged-nav .shared-asset-icon {
+  flex: 0 0 auto;
+}
+
+.btn-flagged-nav .nav-flagged-gem {
+  color: var(--accent-escalation);
+}
+
 /* ── Global Loading Spinner ────────────────────────────── */
 .global-spinner-overlay {
   position: fixed;
@@ -350,6 +377,7 @@ html, body {
   white-space: nowrap;
   font-size: var(--fs-12);
   -webkit-app-region: no-drag;
+  margin-right: -12px;
 }
 
 .progress-mode-btn img {
@@ -5216,6 +5244,11 @@ textarea { resize: vertical; min-height: 60px; }
   mask-image: url("../icons/view.svg");
 }
 
+.shared-asset-icon-gem {
+  -webkit-mask-image: url("../icons/gem.svg");
+  mask-image: url("../icons/gem.svg");
+}
+
 .shared-asset-icon-chevron-right {
   -webkit-mask-image: url("../icons/chevron-right.svg");
   mask-image: url("../icons/chevron-right.svg");
@@ -5245,6 +5278,116 @@ textarea { resize: vertical; min-height: 60px; }
   pointer-events: none;
 }
 
+.flag-escalation-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+.flag-escalation-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  vertical-align: middle;
+  position: relative;
+  z-index: 81;
+}
+.focus-flag .flag-escalation-wrap,
+.ocr-review-flag .flag-escalation-wrap {
+  top: 2px;
+}
+.flag-escalation-btn-active {
+  color: var(--accent-escalation);
+  opacity: 1;
+}
+.flag-escalation-btn-inactive {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+.flag-escalation-btn-inactive:hover,
+.flag-escalation-wrap.is-open .flag-escalation-btn-inactive {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+.flag-escalation-btn-active:hover,
+.flag-escalation-wrap.is-open .flag-escalation-btn-active {
+  opacity: 0.95;
+}
+.flag-escalation-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: none;
+  min-width: 198px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+  z-index: 82;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
+}
+.flag-escalation-wrap.is-open .flag-escalation-menu {
+  display: flex;
+}
+.flag-escalation-popup-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 10020;
+}
+.flag-escalation-popup-menu {
+  position: fixed;
+  min-width: 198px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+  z-index: 10021;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.2;
+}
+.flag-escalation-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.flag-escalation-item:hover,
+.flag-escalation-item:focus {
+  background: var(--glass-06);
+  outline: none;
+}
+.flag-escalation-item.active {
+  color: var(--accent-escalation);
+  background: rgba(100,143,255,0.10);
+}
+.flag-escalation-check {
+  width: 12px;
+  min-width: 12px;
+  text-align: center;
+  color: var(--accent-escalation);
+  font-size: var(--fs-10);
+}
+.flag-escalation-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Small variant for the flair inside the form-view flag-note wrapper */
 .flag-tag-pill-sm {
   font-size: var(--fs-9);
@@ -5264,6 +5407,11 @@ textarea { resize: vertical; min-height: 60px; }
   border: 1px solid var(--error-tint-35);
   color: var(--error);
   white-space: nowrap;
+}
+.flag-tag-pill-escalation {
+  background: rgba(100,143,255,0.10);
+  border-color: rgba(100,143,255,0.35);
+  color: var(--accent-escalation);
 }
 .flag-tag-pill-x {
   background: transparent;
