@@ -271,11 +271,13 @@ function updateNavBar() {
       <button class="btn-sm btn-rewind" id="btn-rewind" title="Rewind actions" style="display:none">Rewind (0)</button>
       ${hasChecklist ? '<button class="btn-sm btn-icon checklist-icon-btn" id="btn-checklist" title="Checklist"><img src="icons/list-todo.svg" alt="" aria-hidden="true"></button>' : ''}
       <button class="btn-sm btn-icon hotkeys-icon-btn" id="btn-hotkeys" title="Hotkeys"><img src="icons/hotkey.svg" alt="" aria-hidden="true"></button>
+      <button class="btn-sm btn-icon keyboard-icon-btn" id="btn-keyboard" title="Special Characters"><img src="icons/keyboard.svg" alt="" aria-hidden="true"></button>
       <button class="btn-sm btn-icon settings-icon-btn" id="btn-settings" title="Settings"><img src="icons/settings.svg" alt="" aria-hidden="true"></button>
     `;
     document.getElementById('btn-rewind').addEventListener('click', openRewindPopup);
     document.getElementById('btn-checklist')?.addEventListener('click', openChecklistPopup);
     document.getElementById('btn-hotkeys')?.addEventListener('click', openHotkeysPopup);
+    document.getElementById('btn-keyboard')?.addEventListener('click', openSpecialCharactersPopup);
     document.getElementById('btn-settings').addEventListener('click', openSettingsPopup);
     document.getElementById('btn-view-flagged')?.addEventListener('click', openFlaggedSpecimensPopup);
     document.getElementById('btn-progress-mode')?.addEventListener('click', () => {
@@ -2629,6 +2631,12 @@ const HOTKEY_CARD_DEFS = [
     description: 'Cycle through prompt-defined default null values for the active field',
     icon: 'icons/tag-secondary.svg',
   },
+  {
+    title: '*K*eyboard',
+    keys: ['mod', 'K'],
+    description: 'Open the special characters palette — click a glyph to copy it to the clipboard',
+    icon: 'icons/keyboard.svg',
+  },
   // Keep this Hotkeys entry last in the list.
   {
     title: '*H*otkeys',
@@ -2764,6 +2772,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'h') {
     e.preventDefault();
     openHotkeysPopup();
+    return;
+  }
+
+  if (e.key === 'k') {
+    e.preventDefault();
+    openSpecialCharactersPopup();
     return;
   }
 
@@ -14616,6 +14630,65 @@ function openHotkeysPopup() {
     </div>
   `;
   shell.overlay.querySelector('#hotkeys-close')?.addEventListener('click', shell.close);
+}
+
+function openSpecialCharactersPopup() {
+  const shell = createPopupShell({ overlayId: 'special-chars-overlay' });
+  if (!shell) return;
+
+  const sections = Array.isArray(globalThis.SPECIAL_CHARACTERS) ? globalThis.SPECIAL_CHARACTERS : [];
+
+  const renderSections = (filter) => sections
+    .filter(sec => filter === '__all__' || sec.id === filter)
+    .map(sec => `
+      <div class="special-chars-section">
+        <div class="special-chars-section-title">${escapeHtml(sec.label)}</div>
+        <div class="special-chars-grid">
+          ${(sec.chars || []).map(ch => `
+            <button class="special-char-btn" type="button" data-char="${escapeAttr(ch)}" title="${escapeAttr(ch)}">${escapeHtml(ch)}</button>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+
+  shell.overlay.innerHTML = `
+    <div class="special-chars-popup" onclick="event.stopPropagation()">
+      <div class="hotkeys-header">
+        <span class="hotkeys-title">Special Characters</span>
+        ${popupCloseBtnHtml('special-chars-close', 'Close special characters')}
+      </div>
+      <div class="special-chars-controls">
+        <label class="special-chars-filter-label" for="special-chars-section">Section</label>
+        <select class="special-chars-filter" id="special-chars-section">
+          <option value="__all__">All sections</option>
+          ${sections.map(sec => `<option value="${escapeAttr(sec.id)}">${escapeHtml(sec.label)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="special-chars-body" id="special-chars-body">
+        ${renderSections('__all__')}
+      </div>
+    </div>
+  `;
+
+  shell.overlay.querySelector('#special-chars-close')?.addEventListener('click', shell.close);
+
+  const bodyEl = shell.overlay.querySelector('#special-chars-body');
+  shell.overlay.querySelector('#special-chars-section')?.addEventListener('change', (e) => {
+    if (bodyEl) bodyEl.innerHTML = renderSections(e.target.value);
+  });
+
+  bodyEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.special-char-btn');
+    if (!btn) return;
+    const ch = btn.dataset.char;
+    if (!ch) return;
+    Promise.resolve(navigator.clipboard.writeText(ch))
+      .catch(err => console.warn('Clipboard write failed', err))
+      .finally(() => {
+        shell.close();
+        showBriefToast(`${ch} Copied to Clipboard`);
+      });
+  });
 }
 
 // ── Find Popup ──────────────────────────────────────────────
