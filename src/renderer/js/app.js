@@ -48,6 +48,21 @@ const CATEGORY_COLORS = {
   MISC: 'var(--cat-misc)',
 };
 
+const SNAKE_FOOD_ASSETS = [
+  'icons/food_1.svg',
+  'icons/food_2.svg',
+  'icons/food_3.svg',
+  'icons/food_4.svg',
+  'icons/food_5.svg',
+  'icons/food_6.svg',
+  'icons/food_7.svg',
+  'icons/food_8.svg',
+  'icons/food_9.svg',
+  'icons/food_10.svg',
+];
+const SNAKE_LIFE_ASSET = 'icons/life.svg';
+const SNAKE_MAX_LEVEL = 20;
+
 function isDemoMode() {
   return !!globalThis.__VVGO_DEMO__;
 }
@@ -1064,6 +1079,147 @@ function getProgressTrackerSummary(project = APP.project) {
       durationMs: sessions.reduce((sum, session) => sum + session.durationMs, 0),
     },
   };
+}
+
+function ensureSnakeArcadeTracker(project = APP.project) {
+  if (!project) return null;
+  const tracker = ensureProgressTracker(project);
+  if (!tracker.games || typeof tracker.games !== 'object' || Array.isArray(tracker.games)) {
+    tracker.games = {};
+  }
+  if (!tracker.games.snake || typeof tracker.games.snake !== 'object') {
+    tracker.games.snake = {
+      version: 1,
+      leaderboard: [],
+      total_games: 0,
+      total_wins: 0,
+      total_score: 0,
+      best_level: 0,
+      last_played_at: null,
+      last_result: null,
+    };
+  }
+  const snake = tracker.games.snake;
+  if (!Array.isArray(snake.leaderboard)) snake.leaderboard = [];
+  snake.leaderboard = snake.leaderboard
+    .filter(entry => entry && typeof entry === 'object')
+    .sort((a, b) => (b.score || 0) - (a.score || 0) || new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 3)
+    .map(entry => ({
+      username: entry.username || 'Unknown',
+      date: entry.date || new Date().toISOString(),
+      score: Number(entry.score || 0),
+    }));
+  snake.total_games = Number(snake.total_games || 0);
+  snake.total_wins = Number(snake.total_wins || 0);
+  snake.total_score = Number(snake.total_score || 0);
+  snake.best_level = Number(snake.best_level || 0);
+  return snake;
+}
+
+function recordSnakeArcadeResult({
+  score = 0,
+  won = false,
+  level = 1,
+  foods = 0,
+  reason = 'quit',
+} = {}, project = APP.project) {
+  const snake = ensureSnakeArcadeTracker(project);
+  if (!snake) return null;
+  const now = new Date().toISOString();
+  const normalizedScore = Math.max(0, Math.round(Number(score) || 0));
+  const normalizedLevel = Math.max(1, Math.min(SNAKE_MAX_LEVEL, Math.round(Number(level) || 1)));
+  const normalizedFoods = Math.max(0, Math.round(Number(foods) || 0));
+
+  snake.total_games += 1;
+  if (won) snake.total_wins += 1;
+  snake.total_score += normalizedScore;
+  snake.best_level = Math.max(snake.best_level, normalizedLevel);
+  snake.last_played_at = now;
+  snake.last_result = {
+    username: APP.username || 'Unknown',
+    date: now,
+    score: normalizedScore,
+    won: !!won,
+    level: normalizedLevel,
+    foods: normalizedFoods,
+    reason,
+  };
+  const entryUsername = APP.username || 'Unknown';
+  const newEntry = {
+    username: entryUsername,
+    date: now,
+    score: normalizedScore,
+    level: normalizedLevel,
+  };
+  const dupeIdx = snake.leaderboard.findIndex(
+    (e) => (e.username || 'Unknown') === entryUsername && (e.score || 0) === normalizedScore
+  );
+  if (dupeIdx >= 0) {
+    snake.leaderboard[dupeIdx] = newEntry;
+  } else {
+    snake.leaderboard.push(newEntry);
+  }
+  snake.leaderboard = snake.leaderboard
+    .sort((a, b) => (b.score || 0) - (a.score || 0) || new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 3);
+  scheduleProjectSave();
+  return snake;
+}
+
+function formatSnakeLeaderboardDate(iso) {
+  if (!iso) return 'Unknown';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return 'Unknown';
+  return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function getBreakTimeGameHtml() {
+  return `
+    <div class="settings-snake-wrap">
+      <div class="settings-snake-hud">
+        <div class="settings-snake-stat">
+          <span class="settings-snake-stat-label">Score</span>
+          <span class="settings-snake-stat-value" id="settings-snake-score">0</span>
+        </div>
+        <div class="settings-snake-stat">
+          <span class="settings-snake-stat-label">Level</span>
+          <span class="settings-snake-stat-value" id="settings-snake-level">1/20</span>
+        </div>
+        <div class="settings-snake-stat">
+          <span class="settings-snake-stat-label">Lives</span>
+          <span class="settings-snake-stat-value settings-snake-stat-value-lives" id="settings-snake-lives"></span>
+        </div>
+        <div class="settings-snake-stat">
+          <span class="settings-snake-stat-label">Food</span>
+          <span class="settings-snake-stat-value" id="settings-snake-food">0/3</span>
+        </div>
+        <div class="settings-snake-stat">
+          <span class="settings-snake-stat-label">Speed</span>
+          <span class="settings-snake-stat-value" id="settings-snake-speed">0/sec</span>
+        </div>
+      </div>
+      <div class="settings-snake-canvas-shell">
+        <canvas id="settings-snake-canvas" class="settings-snake-canvas" width="360" height="360" aria-label="Snake game board"></canvas>
+      </div>
+      <div class="settings-snake-right">
+        <div class="settings-snake-controls">
+          <button class="btn-sm btn-primary" id="settings-snake-start">Start</button>
+          <button class="btn-sm" id="settings-snake-quit" disabled>Quit &amp; Save Score</button>
+          <span class="settings-snake-status" id="settings-snake-status">Press Start to begin. Arrow keys or WASD to move.</span>
+        </div>
+        <div class="settings-snake-leaderboard-card">
+          <div class="settings-snake-leaderboard-title">Top 3 Leaderboard</div>
+          <div class="settings-snake-leaderboard-summary" id="settings-snake-summary">0 games · 0 wins · best L1</div>
+          <div class="settings-snake-leaderboard" id="settings-snake-leaderboard"></div>
+        </div>
+        <div class="settings-snake-help">
+          <div class="settings-snake-help-title">Field Notes</div>
+          <div>Eat the specimen snacks to help our wiggly friend grow big and strong!</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function formatTrackerTimestamp(value) {
@@ -4396,6 +4552,8 @@ let _tableSavedScroll = null;   // { scrollTop, scrollLeft } preserved across vi
 let focusThumbSize = 52;
 let _tableAutoColumnWidths = null;
 const TABLE_FLAG_COLUMN_WIDTH = 90;
+const TABLE_ROW_HEIGHT = 28;
+const TABLE_VIRTUAL_OVERSCAN = 200;
 
 function getTableColumnKeyByIndex(index, allFields = tableAllFields) {
   if (index === 0) return '__goto';
@@ -4716,6 +4874,137 @@ let _tableCurrentFilter = '';
 let _tableCurrentSortCol = 'index';
 let _tableCurrentSortAsc = true;
 
+function refreshTableBody() {
+  renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
+}
+
+function toggleSpecimenToolTag(filename, tool, onRefresh = () => {}) {
+  if (!filename || !tool) return;
+  if (!APP.state.specimens[filename]) initSpecimenState(filename);
+  const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
+  if (!st.flagged) return;
+
+  withRewind({
+    action: 'tagFlag', label: 'Tag Flag',
+    summary: `Tag ${FLAG_TOOL_LABELS[tool] || tool} on ${getDisplayFilename(filename)}`,
+    filenames: [filename], opts: { flagged: true },
+  }, () => {
+    if (specimenHasTagForTool(filename, tool)) {
+      removeTagFromSpecimen(filename, tool);
+    } else {
+      addTagToSpecimen(filename, tool);
+    }
+    syncSpecimenFlaggedState(filename);
+    st.last_touched = new Date().toISOString();
+  });
+  scheduleSaveState(filename);
+  updateNavBar();
+  onRefresh(filename);
+}
+
+function initTableBodyDelegation(tbody) {
+  if (!tbody || tbody._delegatedHandlersInit) return;
+  tbody._delegatedHandlersInit = true;
+
+  tbody.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('.flag-escalation-btn[data-file]')) return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  tbody.addEventListener('click', (e) => {
+    const target = e.target;
+
+    const tagBtn = target.closest('.flag-tag-btn[data-file][data-tool]');
+    if (tagBtn && tbody.contains(tagBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSpecimenToolTag(tagBtn.dataset.file, tagBtn.dataset.tool, () => refreshTableBody());
+      return;
+    }
+
+    const escalationBtn = target.closest('.flag-escalation-btn[data-file]');
+    if (escalationBtn && tbody.contains(escalationBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeInlineEscalationMenus();
+      openTableEscalationPopup(escalationBtn, () => refreshTableBody());
+      return;
+    }
+
+    const gotoCell = target.closest('.cell-goto[data-index]');
+    if (gotoCell && tbody.contains(gotoCell)) {
+      e.stopPropagation();
+      const idx = parseInt(gotoCell.dataset.index, 10);
+      showView('review');
+      loadSpecimen(idx);
+      return;
+    }
+
+    const flagBtn = target.closest('.cell-flag .focus-flag[data-index]');
+    if (flagBtn && tbody.contains(flagBtn)) {
+      if (isFlagAccessoryInteraction(target)) return;
+      e.stopPropagation();
+      const idx = parseInt(flagBtn.dataset.index, 10);
+      const spec = APP.specimens[idx];
+      toggleSpecimenFlagState(spec, {
+        promptForNote: false,
+        tool: 'table',
+        updateUi: (isFlagged) => {
+          flagBtn.classList.toggle('flagged', isFlagged);
+          flagBtn.innerHTML = flagAndTagHtml(spec.filename, 13, 'table');
+          flagBtn.title = isFlagged ? 'Unflag specimen' : 'Flag specimen';
+        }
+      });
+      refreshTableBody();
+      return;
+    }
+
+    const fieldCell = target.closest('td[data-field][data-index]');
+    if (fieldCell && tbody.contains(fieldCell)) {
+      e.stopPropagation();
+      const idx = parseInt(fieldCell.dataset.index, 10);
+      if (idx !== tableSelectedIndex) selectTableRow(idx);
+
+      if (tableEditingLocked) {
+        selectTableCell(fieldCell);
+      } else {
+        tbody.querySelectorAll('td.expanded').forEach(other => {
+          if (other !== fieldCell) other.classList.remove('expanded');
+        });
+        fieldCell.classList.add('expanded');
+        startCellEdit(fieldCell, idx, fieldCell.dataset.field, tableAllFields);
+      }
+      return;
+    }
+
+    const row = target.closest('tr[data-index]');
+    if (row && tbody.contains(row)) {
+      selectTableRow(parseInt(row.dataset.index, 10));
+    }
+  });
+
+  tbody.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+
+    const tagBtn = e.target.closest('.flag-tag-btn[data-file][data-tool]');
+    if (tagBtn && tbody.contains(tagBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSpecimenToolTag(tagBtn.dataset.file, tagBtn.dataset.tool, () => refreshTableBody());
+      return;
+    }
+
+    const escalationBtn = e.target.closest('.flag-escalation-btn[data-file]');
+    if (escalationBtn && tbody.contains(escalationBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeInlineEscalationMenus();
+      openTableEscalationPopup(escalationBtn, () => refreshTableBody());
+    }
+  });
+}
+
 function prepareTableRows(allFields) {
   if (_tableRowsCache) return _tableRowsCache;
   const rows = [];
@@ -4769,11 +5058,10 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
 
   // Virtual scroll: only render visible rows + buffer
   const wrapper = tbody.closest('.batch-table-wrapper');
-  const ROW_HEIGHT = 28;
-  const totalHeight = filtered.length * ROW_HEIGHT;
 
   // Store allFields for scroll handler
   tbody._vsAllFields = allFields;
+  initTableBodyDelegation(tbody);
 
   // Set up virtual scroll listener once
   if (!tbody._virtualScrollInit && wrapper) {
@@ -4783,12 +5071,12 @@ function renderTableBody(allFields, filter, sortCol = 'index', sortAsc = true) {
       if (scrollRAF) return;
       scrollRAF = requestAnimationFrame(() => {
         scrollRAF = null;
-        renderVisibleTableRows(tbody._vsAllFields, wrapper, null, ROW_HEIGHT);
+        renderVisibleTableRows(tbody._vsAllFields, wrapper, _tableFilteredCache, TABLE_ROW_HEIGHT);
       });
-    });
+    }, { passive: true });
   }
 
-  renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT);
+  renderVisibleTableRows(allFields, wrapper, filtered, TABLE_ROW_HEIGHT, { force: true });
 }
 
 function filterAndSortTableRows(allFields, filter, sortCol, sortAsc) {
@@ -4815,24 +5103,30 @@ function filterAndSortTableRows(allFields, filter, sortCol, sortAsc) {
   return filtered;
 }
 
-function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
+function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT, { force = false } = {}) {
   const tbody = document.getElementById('table-body');
   if (!tbody || !wrapper) return;
 
   // Guard: never destroy the DOM while a cell is being edited
   if (tbody.querySelector('.cell-edit-input')) return;
 
-  // If no pre-filtered data passed (scroll event), recompute from current state
+  // Reuse the current filtered/sorted row cache during scroll.
   if (!filtered) {
-    filtered = filterAndSortTableRows(allFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
-    _tableFilteredCache = filtered;
+    filtered = _tableFilteredCache || filterAndSortTableRows(allFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc);
+    if (!_tableFilteredCache) _tableFilteredCache = filtered;
   }
 
   const scrollTop = wrapper.scrollTop;
   const viewHeight = wrapper.clientHeight;
-  const buffer = 10;
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - buffer);
-  const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + buffer);
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - TABLE_VIRTUAL_OVERSCAN);
+  const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + TABLE_VIRTUAL_OVERSCAN);
+
+  if (!force
+      && tbody._vsLastStartIdx === startIdx
+      && tbody._vsLastEndIdx === endIdx
+      && tbody._vsLastFilteredCount === filtered.length) {
+    return;
+  }
 
   const topPad = startIdx * ROW_HEIGHT;
   const bottomPad = (filtered.length - endIdx) * ROW_HEIGHT;
@@ -4864,67 +5158,17 @@ function renderVisibleTableRows(allFields, wrapper, filtered, ROW_HEIGHT) {
     <tr class="table-spacer-row" style="height:${bottomPad}px"><td colspan="999"></td></tr>
   `;
 
-  // Click eye icon to go to form view
-  tbody.querySelectorAll('.cell-goto').forEach(td => {
-    td.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(td.dataset.index);
-      showView('review');
-      loadSpecimen(idx);
-    });
-  });
+  tbody._vsLastStartIdx = startIdx;
+  tbody._vsLastEndIdx = endIdx;
+  tbody._vsLastFilteredCount = filtered.length;
 
-  // Flag column click handler
-  tbody.querySelectorAll('.cell-flag .focus-flag').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      // Let accessory controls manage their own interactions
-      if (isFlagAccessoryInteraction(e.target)) return;
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.index);
-      const spec = APP.specimens[idx];
-      toggleSpecimenFlagState(spec, {
-        promptForNote: false,
-        tool: 'table',
-        updateUi: (isFlagged) => {
-          btn.classList.toggle('flagged', isFlagged);
-          btn.innerHTML = flagAndTagHtml(spec.filename, 13, 'table');
-          btn.title = isFlagged ? 'Unflag specimen' : 'Flag specimen';
-        }
-      });
-      wireTagIconButtons(tbody, () => renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc));
-    });
-  });
-  wireTagIconButtons(tbody, () => renderTableBody(tableAllFields, _tableCurrentFilter, _tableCurrentSortCol, _tableCurrentSortAsc));
-
-  // Single click: select cell (when locked) or expand+edit (when unlocked)
-  tbody.querySelectorAll('td[data-field]').forEach(td => {
-    td.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(td.dataset.index);
-      if (idx !== tableSelectedIndex) selectTableRow(idx);
-
-      if (tableEditingLocked) {
-        // Just select/highlight the cell
-        selectTableCell(td);
-      } else {
-        // Collapse other expanded cells
-        tbody.querySelectorAll('td.expanded').forEach(other => {
-          if (other !== td) other.classList.remove('expanded');
-        });
-        td.classList.add('expanded');
-
-        // Start editing immediately
-        startCellEdit(td, idx, td.dataset.field, allFields);
-      }
-    });
-  });
-
-  // Click row (non-field area) to select for image
-  tbody.querySelectorAll('tr').forEach(tr => {
-    tr.addEventListener('click', () => {
-      selectTableRow(parseInt(tr.dataset.index));
-    });
-  });
+  if (tableSelectedField) {
+    const selectedTd = tbody.querySelector(`td[data-field="${CSS.escape(tableSelectedField)}"][data-index="${tableSelectedIndex}"]`);
+    if (selectedTd) {
+      selectedTd.classList.add('cell-selected');
+      tableSelectedCell = selectedTd;
+    }
+  }
 }
 
 function selectTableRow(index) {
@@ -11123,28 +11367,7 @@ function wireTagIconButtons(container, onRefresh = () => {}) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const filename = btn.dataset.file;
-      const tool = btn.dataset.tool;
-      if (!APP.state.specimens[filename]) initSpecimenState(filename);
-      const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
-      if (!st.flagged) return;
-
-      withRewind({
-        action: 'tagFlag', label: 'Tag Flag',
-        summary: `Tag ${FLAG_TOOL_LABELS[tool] || tool} on ${getDisplayFilename(filename)}`,
-        filenames: [filename], opts: { flagged: true },
-      }, () => {
-        if (specimenHasTagForTool(filename, tool)) {
-          removeTagFromSpecimen(filename, tool);
-        } else {
-          addTagToSpecimen(filename, tool);
-        }
-        syncSpecimenFlaggedState(filename);
-        st.last_touched = new Date().toISOString();
-      });
-      scheduleSaveState(filename);
-      updateNavBar();
-      onRefresh(filename);
+      toggleSpecimenToolTag(btn.dataset.file, btn.dataset.tool, onRefresh);
     });
   });
 
@@ -14593,6 +14816,958 @@ function highlightFindMatch(value, query) {
   return parts.join('');
 }
 
+function initSettingsSnakeGame(overlay) {
+  const canvas = overlay.querySelector('#settings-snake-canvas');
+  const startBtn = overlay.querySelector('#settings-snake-start');
+  const quitBtn = overlay.querySelector('#settings-snake-quit');
+  const scoreEl = overlay.querySelector('#settings-snake-score');
+  const levelEl = overlay.querySelector('#settings-snake-level');
+  const livesEl = overlay.querySelector('#settings-snake-lives');
+  const foodEl = overlay.querySelector('#settings-snake-food');
+  const speedEl = overlay.querySelector('#settings-snake-speed');
+  const statusEl = overlay.querySelector('#settings-snake-status');
+  const leaderboardEl = overlay.querySelector('#settings-snake-leaderboard');
+  const summaryEl = overlay.querySelector('#settings-snake-summary');
+  if (!canvas || !startBtn || !quitBtn || !scoreEl || !levelEl || !livesEl || !foodEl || !speedEl || !statusEl || !leaderboardEl || !summaryEl) {
+    return () => {};
+  }
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return () => {};
+
+  const BOARD_COLS = 18;
+  const BOARD_ROWS = 18;
+  const CELL_SIZE = 20;
+  const MAX_LEVEL = SNAKE_MAX_LEVEL;
+  const LEVEL_FOOD_GOAL = 3;
+  const BASE_STEP_MS = 190;
+  const MIN_STEP_MS = 72;
+  const FOOD_DRAW_INSET = 2;
+  const BONUS_LIFE_LEVEL_SPAN = 5;
+  const BONUS_LIFE_CHANCE = 1 / 11;
+  const foodImages = new Map();
+  const tintedFoodCache = new Map();
+
+  SNAKE_FOOD_ASSETS.forEach((src) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = src;
+    foodImages.set(src, img);
+  });
+  {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = SNAKE_LIFE_ASSET;
+    foodImages.set(SNAKE_LIFE_ASSET, img);
+  }
+
+  let animationFrameId = null;
+  let destroyed = false;
+
+  const state = {
+    phase: 'idle',
+    started: false,
+    runRecorded: false,
+    score: 0,
+    level: 1,
+    lives: 3,
+    foodsEaten: 0,
+    foodsThisLevel: 0,
+    stepMs: BASE_STEP_MS,
+    snake: [],
+    direction: { x: 1, y: 0 },
+    nextDirection: { x: 1, y: 0 },
+    food: null,
+    lastTickAt: 0,
+    respawnAt: 0,
+    countdownStartedAt: 0,
+    gameOverStartedAt: 0,
+    explosionStartedAt: 0,
+    particles: [],
+    shockwaves: [],
+    victoryTiles: [],
+    message: 'Press Start to begin. Arrow keys or WASD to move.',
+    winTagline: '',
+    bannerUntil: 0,
+    awardedLifeBlocks: new Set(),
+  };
+
+  function ensureBoardDpr() {
+    const dpr = window.devicePixelRatio || 1;
+    const logicalSide = BOARD_COLS * CELL_SIZE;
+    const shell = canvas.parentElement;
+    let availW = 0;
+    let availH = 0;
+    if (shell) {
+      const shellRect = shell.getBoundingClientRect();
+      const shellStyle = getComputedStyle(shell);
+      const padX = parseFloat(shellStyle.paddingLeft) + parseFloat(shellStyle.paddingRight);
+      const padY = parseFloat(shellStyle.paddingTop) + parseFloat(shellStyle.paddingBottom);
+      availW = shellRect.width - padX;
+      availH = shellRect.height - padY;
+    }
+    const side = Math.max(1, Math.floor(Math.min(availW || logicalSide, availH || logicalSide)));
+    if (canvas.style.width !== `${side}px`) canvas.style.width = `${side}px`;
+    if (canvas.style.height !== `${side}px`) canvas.style.height = `${side}px`;
+    const target = Math.max(1, Math.round(side * dpr));
+    if (canvas.width !== target || canvas.height !== target) {
+      canvas.width = target;
+      canvas.height = target;
+    }
+    const scale = target / logicalSide;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  }
+
+  function snakeSpeedLabel() {
+    const perSecond = (1000 / state.stepMs).toFixed(1);
+    return `${perSecond}/sec`;
+  }
+
+  function getCssVarValue(name, fallback = '') {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  }
+
+  function hexToRgba(hex, alpha = 1) {
+    if (!hex || typeof hex !== 'string') return `rgba(255,255,255,${alpha})`;
+    const normalized = hex.trim();
+    if (normalized.startsWith('rgba(') || normalized.startsWith('rgb(')) {
+      return normalized;
+    }
+    const raw = normalized.replace('#', '');
+    const full = raw.length === 3
+      ? raw.split('').map((c) => c + c).join('')
+      : raw;
+    if (full.length !== 6) return normalized;
+    const r = Number.parseInt(full.slice(0, 2), 16);
+    const g = Number.parseInt(full.slice(2, 4), 16);
+    const b = Number.parseInt(full.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function getSnakePalette() {
+    return {
+      bgPrimary: getCssVarValue('--bg-primary', '#1a1a1a'),
+      bgSecondary: getCssVarValue('--bg-secondary', '#242424'),
+      bgTertiary: getCssVarValue('--bg-tertiary', '#2e2e2e'),
+      border: getCssVarValue('--border', '#3a3a3a'),
+      textPrimary: getCssVarValue('--text-primary', '#e0e0e0'),
+      textSecondary: getCssVarValue('--text-secondary', '#999999'),
+      accent: getCssVarValue('--accent', '#2ecc71'),
+      accentSecondary: getCssVarValue('--accent-secondary', '#CA50F7'),
+      accentGold: getCssVarValue('--accent-gold', '#FFCB05'),
+      glass04: getCssVarValue('--glass-04', 'rgba(255,255,255,0.04)'),
+      glass08: getCssVarValue('--glass-08', 'rgba(255,255,255,0.08)'),
+    };
+  }
+
+  function getTintedFoodImage(asset, tint) {
+    const img = foodImages.get(asset);
+    if (!img?.complete || !img.naturalWidth || !img.naturalHeight) return null;
+    const cacheKey = `${asset}::${tint}`;
+    let tinted = tintedFoodCache.get(cacheKey);
+    if (tinted) return tinted;
+    tinted = document.createElement('canvas');
+    tinted.width = img.naturalWidth;
+    tinted.height = img.naturalHeight;
+    const tintCtx = tinted.getContext('2d');
+    if (!tintCtx) return null;
+    tintCtx.clearRect(0, 0, tinted.width, tinted.height);
+    tintCtx.drawImage(img, 0, 0, tinted.width, tinted.height);
+    tintCtx.globalCompositeOperation = 'source-in';
+    tintCtx.fillStyle = tint;
+    tintCtx.fillRect(0, 0, tinted.width, tinted.height);
+    tintCtx.globalCompositeOperation = 'source-over';
+    tintedFoodCache.set(cacheKey, tinted);
+    return tinted;
+  }
+
+  function randomFreeCell() {
+    const occupied = new Set(state.snake.map(seg => `${seg.x},${seg.y}`));
+    const openCells = [];
+    for (let y = 0; y < BOARD_ROWS; y++) {
+      for (let x = 0; x < BOARD_COLS; x++) {
+        const key = `${x},${y}`;
+        if (!occupied.has(key)) openCells.push({ x, y });
+      }
+    }
+    if (openCells.length === 0) return { x: Math.floor(BOARD_COLS / 2), y: Math.floor(BOARD_ROWS / 2) };
+    return openCells[Math.floor(Math.random() * openCells.length)];
+  }
+
+  function currentLifeBonusBlock() {
+    return Math.floor((Math.max(1, state.level) - 1) / BONUS_LIFE_LEVEL_SPAN);
+  }
+
+  function canSpawnLifeBonus() {
+    return !state.awardedLifeBlocks.has(currentLifeBonusBlock());
+  }
+
+  function chooseFoodAsset() {
+    if (canSpawnLifeBonus() && Math.random() < BONUS_LIFE_CHANCE) {
+      return SNAKE_LIFE_ASSET;
+    }
+    return SNAKE_FOOD_ASSETS[Math.floor(Math.random() * SNAKE_FOOD_ASSETS.length)];
+  }
+
+  function placeFood() {
+    const cell = randomFreeCell();
+    const asset = chooseFoodAsset();
+    state.food = {
+      ...cell,
+      asset,
+      kind: asset === SNAKE_LIFE_ASSET ? 'life' : 'food',
+    };
+  }
+
+  function resetSnakeBody() {
+    const midX = Math.floor(BOARD_COLS / 2);
+    const midY = Math.floor(BOARD_ROWS / 2);
+    state.snake = [
+      { x: midX, y: midY },
+      { x: midX - 1, y: midY },
+      { x: midX - 2, y: midY },
+      { x: midX - 3, y: midY },
+    ];
+    state.direction = { x: 1, y: 0 };
+    state.nextDirection = { x: 1, y: 0 };
+    placeFood();
+  }
+
+  function resetGameStateForNewRun() {
+    state.phase = 'idle';
+    state.started = false;
+    state.runRecorded = false;
+    state.score = 0;
+    state.level = 1;
+    state.lives = 3;
+    state.foodsEaten = 0;
+    state.foodsThisLevel = 0;
+    state.stepMs = BASE_STEP_MS;
+    state.lastTickAt = 0;
+    state.respawnAt = 0;
+    state.countdownStartedAt = 0;
+    state.gameOverStartedAt = 0;
+    state.explosionStartedAt = 0;
+    state.particles = [];
+    state.shockwaves = [];
+    state.victoryTiles = [];
+    state.bannerUntil = 0;
+    state.winTagline = '';
+    state.message = 'Press Start to begin. Arrow keys or WASD to move.';
+    state.awardedLifeBlocks = new Set();
+    resetSnakeBody();
+  }
+
+  function updateHud() {
+    scoreEl.textContent = String(state.score);
+    levelEl.textContent = `${state.level}/${MAX_LEVEL}`;
+    livesEl.innerHTML = state.lives > 0
+      ? `<span class="settings-snake-lives-track" aria-label="${state.lives} lives">${Array.from({ length: state.lives }, () => sharedAssetIconHtml('shared-asset-icon-life', 14, 'settings-snake-life-icon')).join('')}</span>`
+      : '<span class="settings-snake-life-empty">0</span>';
+    foodEl.textContent = `${state.foodsThisLevel}/${LEVEL_FOOD_GOAL}`;
+    speedEl.textContent = snakeSpeedLabel();
+    statusEl.textContent = state.message;
+    startBtn.textContent = state.started ? 'Restart' : 'Start';
+    quitBtn.disabled = !state.started || state.phase === 'exploding';
+  }
+
+  function renderLeaderboard() {
+    const snake = ensureSnakeArcadeTracker(APP.project);
+    const board = snake?.leaderboard || [];
+    const totals = snake
+      ? `${snake.total_games} game${snake.total_games !== 1 ? 's' : ''} · ${snake.total_wins} win${snake.total_wins !== 1 ? 's' : ''} · best L${Math.max(1, snake.best_level || 1)}`
+      : '0 games · 0 wins · best L1';
+    summaryEl.textContent = totals;
+    leaderboardEl.innerHTML = board.length === 0
+      ? '<div class="snake-leaderboard-empty">No high scores yet. Be the first curator to hiss-ter greatness.</div>'
+      : board.map((entry, idx) => `
+          <div class="snake-leaderboard-row">
+            <span class="snake-leaderboard-rank">#${idx + 1}</span>
+            <span class="snake-leaderboard-user">${escapeHtml(entry.username || 'Unknown')}</span>
+            <span class="snake-leaderboard-level">L${escapeHtml(String(Math.max(1, entry.level || 1)))}</span>
+            <span class="snake-leaderboard-date">${escapeHtml(formatSnakeLeaderboardDate(entry.date))}</span>
+            <span class="snake-leaderboard-score">${escapeHtml(String(entry.score || 0))}</span>
+          </div>
+        `).join('');
+  }
+
+  function finalizeRun({ won = false, reason = 'quit' } = {}) {
+    if (!state.started || state.runRecorded) return;
+    state.runRecorded = true;
+    recordSnakeArcadeResult({
+      score: state.score,
+      won,
+      level: state.level,
+      foods: state.foodsEaten,
+      reason,
+    });
+    renderLeaderboard();
+  }
+
+  function createEatBurst(x, y, amount = 10) {
+    for (let i = 0; i < amount; i++) {
+      const angle = (Math.PI * 2 * i) / amount;
+      const speed = 0.7 + Math.random() * 1.7;
+      state.particles.push({
+        kind: 'spark',
+        x: x + 0.5,
+        y: y + 0.5,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 18 + Math.random() * 14,
+        age: 0,
+        size: 0.16 + Math.random() * 0.2,
+        hue: (i / amount) * 360,
+      });
+    }
+  }
+
+  function createCrashBurst() {
+    const head = state.snake[0];
+    if (!head) return;
+    for (let i = 0; i < 24; i++) {
+      const angle = (Math.PI * 2 * i) / 24;
+      const speed = 1.2 + Math.random() * 2.2;
+      state.particles.push({
+        kind: 'chunk',
+        x: head.x + 0.5,
+        y: head.y + 0.5,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 32 + Math.random() * 18,
+        age: 0,
+        size: 0.18 + Math.random() * 0.3,
+        hue: (performance.now() / 30 + i * 10) % 360,
+      });
+    }
+    state.shockwaves.push({
+      x: head.x + 0.5,
+      y: head.y + 0.5,
+      radius: 0,
+      life: 22,
+      age: 0,
+      color: 'rgba(255,255,255,0.6)',
+    });
+  }
+
+  function createVictoryExplosion() {
+    const taglines = [
+      'Uncoiled glory!',
+      'Specimen supernova!',
+      'Maximum herbaria hiss-teria!',
+      'Rainbow taxonomic detonation!',
+    ];
+    state.winTagline = taglines[Math.floor(Math.random() * taglines.length)];
+    state.explosionStartedAt = performance.now();
+    state.particles = [];
+    state.shockwaves = [];
+    state.victoryTiles = [];
+
+    const tintKeys = ['accent', 'accentSecondary', 'accentGold'];
+    for (let y = 0; y < BOARD_ROWS; y++) {
+      for (let x = 0; x < BOARD_COLS; x++) {
+        const isLife = Math.random() < 0.14;
+        const asset = isLife
+          ? SNAKE_LIFE_ASSET
+          : SNAKE_FOOD_ASSETS[Math.floor(Math.random() * SNAKE_FOOD_ASSETS.length)];
+        const tintKey = isLife ? 'accentGold' : tintKeys[Math.floor(Math.random() * tintKeys.length)];
+        const diag = (x + y) / (BOARD_COLS + BOARD_ROWS);
+        const spawnAt = diag * 950 + Math.random() * 180;
+        state.victoryTiles.push({
+          asset,
+          tintKey,
+          isLife,
+          x: x + 0.5,
+          y: y + 0.5,
+          vx: 0,
+          vy: 0,
+          rotation: (Math.random() - 0.5) * 0.25,
+          rotVel: 0,
+          scale: 0,
+          alpha: 1,
+          spawnAt,
+          explodeAt: 1500,
+          exploded: false,
+        });
+      }
+    }
+
+    state.shockwaves.push(
+      { x: BOARD_COLS / 2, y: BOARD_ROWS / 2, radius: 0, life: 46, age: 0, color: 'rgba(255,255,255,0.42)' },
+      { x: BOARD_COLS / 2, y: BOARD_ROWS / 2, radius: 0, life: 72, age: 6, color: 'rgba(255,255,255,0.24)' },
+      { x: BOARD_COLS / 2, y: BOARD_ROWS / 2, radius: 0, life: 96, age: 14, color: 'rgba(255,255,255,0.14)' }
+    );
+  }
+
+  function beginRound(afterCrash = false) {
+    resetSnakeBody();
+    state.lastTickAt = performance.now();
+    state.phase = 'running';
+    state.message = afterCrash
+      ? `Back in the field. ${state.lives} live${state.lives !== 1 ? 's' : ''} remaining.`
+      : `Level ${state.level} begins. Hunt ${LEVEL_FOOD_GOAL} snacks.`;
+    state.bannerUntil = performance.now() + 1200;
+    updateHud();
+  }
+
+  function startGame() {
+    resetGameStateForNewRun();
+    state.started = true;
+    state.phase = 'countdown';
+    state.countdownStartedAt = performance.now();
+    state.message = 'Get ready…';
+    updateHud();
+    renderLeaderboard();
+    requestAnimationFrame(loop);
+  }
+
+  function resetToIdle(message = 'Press Start to begin. Arrow keys or WASD to move.') {
+    resetGameStateForNewRun();
+    state.message = message;
+    updateHud();
+  }
+
+  function quitGame() {
+    if (state.started && !state.runRecorded) {
+      finalizeRun({ won: false, reason: 'quit' });
+    }
+    resetToIdle('Run logged. Press Start to slither again.');
+  }
+
+  function handleCrash(reason) {
+    createCrashBurst();
+    state.lives -= 1;
+    if (state.lives <= 0) {
+      finalizeRun({ won: false, reason });
+      state.phase = 'gameover';
+      state.gameOverStartedAt = performance.now();
+      state.started = false;
+      state.message = `All lives lost. Final score ${state.score}.`;
+      updateHud();
+      return;
+    }
+    state.phase = 'respawning';
+    state.respawnAt = performance.now() + 950;
+    state.message = `${reason}. ${state.lives} live${state.lives !== 1 ? 's' : ''} left.`;
+    updateHud();
+  }
+
+  function handleWin() {
+    finalizeRun({ won: true, reason: 'victory' });
+    state.phase = 'exploding';
+    state.message = `Level ${MAX_LEVEL} conquered. Brace for detonation.`;
+    createVictoryExplosion();
+    updateHud();
+  }
+
+  function advanceLevelIfNeeded() {
+    if (state.foodsThisLevel < LEVEL_FOOD_GOAL) return false;
+    if (state.level >= MAX_LEVEL) {
+      handleWin();
+      return true;
+    }
+    state.level += 1;
+    state.foodsThisLevel = 0;
+    state.stepMs = Math.max(MIN_STEP_MS, BASE_STEP_MS - (state.level - 1) * 8);
+    state.message = `Level ${state.level}! The herbarium gets weirder.`;
+    state.bannerUntil = performance.now() + 1200;
+    return false;
+  }
+
+  function stepGame() {
+    if (state.phase !== 'running') return;
+    state.direction = { ...state.nextDirection };
+    const head = state.snake[0];
+    const nextHead = { x: head.x + state.direction.x, y: head.y + state.direction.y };
+    const willEat = state.food && nextHead.x === state.food.x && nextHead.y === state.food.y;
+    const body = willEat ? state.snake : state.snake.slice(0, -1);
+
+    if (nextHead.x < 0 || nextHead.y < 0 || nextHead.x >= BOARD_COLS || nextHead.y >= BOARD_ROWS) {
+      handleCrash('Bonked the wall');
+      return;
+    }
+    if (body.some(seg => seg.x === nextHead.x && seg.y === nextHead.y)) {
+      handleCrash('Ate your own rainbow tail');
+      return;
+    }
+
+    state.snake.unshift(nextHead);
+    if (willEat) {
+      const ateLife = state.food?.kind === 'life';
+      state.score += (ateLife ? 25 : 10) * state.level;
+      state.foodsEaten += 1;
+      state.foodsThisLevel += 1;
+      createEatBurst(nextHead.x, nextHead.y, ateLife ? 18 : 12);
+      if (ateLife) {
+        state.lives += 1;
+        state.awardedLifeBlocks.add(currentLifeBonusBlock());
+        state.message = `Bonus life! You now have ${state.lives} lives.`;
+        state.bannerUntil = performance.now() + 1200;
+      }
+      if (advanceLevelIfNeeded()) {
+        updateHud();
+        return;
+      }
+      placeFood();
+      updateHud();
+      return;
+    }
+
+    state.snake.pop();
+    updateHud();
+  }
+
+  function updateParticles() {
+    state.particles = state.particles.filter((particle) => {
+      particle.age += 1;
+      particle.x += particle.vx * 0.06;
+      particle.y += particle.vy * 0.06;
+      particle.vx *= 0.985;
+      particle.vy *= 0.985;
+      if (particle.kind !== 'spark') particle.vy += 0.006;
+      return particle.age < particle.life;
+    });
+    state.shockwaves = state.shockwaves.filter((wave) => {
+      wave.age += 1;
+      wave.radius += 0.18;
+      return wave.age < wave.life;
+    });
+  }
+
+  function updateVictoryTiles(now) {
+    if (state.victoryTiles.length === 0) return;
+    const elapsed = now - state.explosionStartedAt;
+    const centerX = BOARD_COLS / 2;
+    const centerY = BOARD_ROWS / 2;
+    const gravity = 0.016;
+    const damping = 0.996;
+    state.victoryTiles = state.victoryTiles.filter((tile) => {
+      if (elapsed < tile.spawnAt) {
+        tile.scale = 0;
+        return true;
+      }
+      if (!tile.exploded && elapsed < tile.explodeAt) {
+        const sinceSpawn = elapsed - tile.spawnAt;
+        const pop = Math.min(1, sinceSpawn / 220);
+        tile.scale = pop < 0.6 ? (pop / 0.6) * 1.15 : 1.15 - ((pop - 0.6) / 0.4) * 0.15;
+        return true;
+      }
+      if (!tile.exploded) {
+        tile.exploded = true;
+        const dx = tile.x - centerX;
+        const dy = tile.y - centerY;
+        const dist = Math.max(0.4, Math.sqrt(dx * dx + dy * dy));
+        const speed = 0.16 + Math.random() * 0.28;
+        const UPWARD_KICK = 0.3;
+        const pushFrames = 18;
+        tile.vx = 0;
+        tile.vy = 0;
+        tile.pushAx = ((dx / dist) * speed) / pushFrames;
+        tile.pushAy = ((dy / dist) * speed - UPWARD_KICK) / pushFrames;
+        tile.pushFramesLeft = pushFrames;
+        tile.rotVel = (Math.random() - 0.5) * 0.18;
+      }
+      if (tile.pushFramesLeft > 0) {
+        tile.vx += tile.pushAx;
+        tile.vy += tile.pushAy;
+        tile.pushFramesLeft -= 1;
+      }
+      tile.vy += gravity;
+      tile.vx *= damping;
+      tile.x += tile.vx;
+      tile.y += tile.vy;
+      tile.rotation += tile.rotVel;
+      if (tile.y > BOARD_ROWS + 2) {
+        tile.alpha = Math.max(0, tile.alpha - 0.08);
+      }
+      return tile.alpha > 0.02 && tile.y < BOARD_ROWS + 6 && tile.x > -6 && tile.x < BOARD_COLS + 6;
+    });
+  }
+
+  function drawRoundedCell(x, y, fill, inset = 1.5) {
+    const px = x * CELL_SIZE + inset;
+    const py = y * CELL_SIZE + inset;
+    const size = CELL_SIZE - inset * 2;
+    const radius = 5;
+    ctx.beginPath();
+    ctx.moveTo(px + radius, py);
+    ctx.arcTo(px + size, py, px + size, py + size, radius);
+    ctx.arcTo(px + size, py + size, px, py + size, radius);
+    ctx.arcTo(px, py + size, px, py, radius);
+    ctx.arcTo(px, py, px + size, py, radius);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+
+  function drawBoard(now) {
+    ctx.clearRect(0, 0, BOARD_COLS * CELL_SIZE, BOARD_ROWS * CELL_SIZE);
+    const palette = getSnakePalette();
+
+    const boardGradient = ctx.createLinearGradient(0, 0, BOARD_COLS * CELL_SIZE, BOARD_ROWS * CELL_SIZE);
+    boardGradient.addColorStop(0, palette.bgTertiary);
+    boardGradient.addColorStop(0.55, palette.bgSecondary);
+    boardGradient.addColorStop(1, palette.bgPrimary);
+    ctx.fillStyle = boardGradient;
+    ctx.fillRect(0, 0, BOARD_COLS * CELL_SIZE, BOARD_ROWS * CELL_SIZE);
+
+    const ambientGradient = ctx.createRadialGradient(
+      BOARD_COLS * CELL_SIZE * 0.3,
+      BOARD_ROWS * CELL_SIZE * 0.2,
+      8,
+      BOARD_COLS * CELL_SIZE * 0.3,
+      BOARD_ROWS * CELL_SIZE * 0.2,
+      BOARD_COLS * CELL_SIZE * 0.85
+    );
+    ambientGradient.addColorStop(0, hexToRgba(palette.accentSecondary, 0.16));
+    ambientGradient.addColorStop(0.45, hexToRgba(palette.accentSecondary, 0.06));
+    ambientGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = ambientGradient;
+    ctx.fillRect(0, 0, BOARD_COLS * CELL_SIZE, BOARD_ROWS * CELL_SIZE);
+
+    ctx.strokeStyle = hexToRgba(palette.border, 0.9);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, BOARD_COLS * CELL_SIZE - 1, BOARD_ROWS * CELL_SIZE - 1);
+
+    for (let x = 0; x <= BOARD_COLS; x++) {
+      ctx.strokeStyle = hexToRgba(palette.border, 0.32);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x * CELL_SIZE + 0.5, 0);
+      ctx.lineTo(x * CELL_SIZE + 0.5, BOARD_ROWS * CELL_SIZE);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= BOARD_ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(0, y * CELL_SIZE + 0.5);
+      ctx.lineTo(BOARD_COLS * CELL_SIZE, y * CELL_SIZE + 0.5);
+      ctx.stroke();
+    }
+
+    state.shockwaves.forEach((wave) => {
+      const alpha = 1 - (wave.age / wave.life);
+      ctx.beginPath();
+      ctx.strokeStyle = wave.color.replace(/[\d.]+\)$/g, `${Math.max(0, alpha)})`);
+      ctx.lineWidth = 3;
+      ctx.arc(wave.x * CELL_SIZE, wave.y * CELL_SIZE, wave.radius * CELL_SIZE, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+
+    const hueBase = ((now / 11000) * 360) % 360;
+    const pulse = 0.88 + 0.12 * Math.sin((now / 5500) * Math.PI * 2);
+    state.snake.forEach((seg, idx) => {
+      const hue = (hueBase + idx * 18) % 360;
+      const lightness = idx === 0 ? 68 * pulse : 58 * pulse;
+      drawRoundedCell(seg.x, seg.y, `hsl(${hue} 95% ${lightness}%)`, idx === 0 ? 1 : 2);
+      if (idx === 0) {
+        const eyeOffsetX = state.direction.x === 0 ? 4 : state.direction.x > 0 ? 11 : 5;
+        const eyeOffsetY = state.direction.y === 0 ? 4 : state.direction.y > 0 ? 11 : 5;
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.beginPath();
+        ctx.arc(seg.x * CELL_SIZE + eyeOffsetX, seg.y * CELL_SIZE + 6, 1.5, 0, Math.PI * 2);
+        ctx.arc(seg.x * CELL_SIZE + 14 - (state.direction.x !== 0 ? 0 : 0), seg.y * CELL_SIZE + eyeOffsetY, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    if (state.food) {
+      const tint = state.food.kind === 'life' ? palette.accentGold : palette.accentSecondary;
+      const img = getTintedFoodImage(state.food.asset, tint);
+      if (img) {
+        ctx.save();
+        ctx.translate(state.food.x * CELL_SIZE + CELL_SIZE / 2, state.food.y * CELL_SIZE + CELL_SIZE / 2);
+        const bob = Math.sin(now / 420) * 1.4;
+        const scale = 0.82 + (Math.sin(now / 520) * 0.04);
+        ctx.translate(0, bob);
+        ctx.scale(scale, scale);
+        const drawSize = CELL_SIZE - FOOD_DRAW_INSET * 2;
+        ctx.shadowBlur = state.food.kind === 'life' ? 14 : 12;
+        ctx.shadowColor = hexToRgba(tint, state.food.kind === 'life' ? 0.7 : 0.55);
+        ctx.drawImage(img, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+        ctx.restore();
+      } else {
+        drawRoundedCell(state.food.x, state.food.y, hexToRgba(tint, 0.92), 4);
+      }
+    }
+
+    state.particles.forEach((particle) => {
+      const alpha = Math.max(0, 1 - (particle.age / particle.life));
+      const px = particle.x * CELL_SIZE;
+      const py = particle.y * CELL_SIZE;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate((particle.hue + particle.age * 6) * (Math.PI / 180));
+      ctx.fillStyle = `hsla(${particle.hue}, 100%, 65%, ${alpha})`;
+      const size = particle.size * CELL_SIZE;
+      if (particle.kind === 'confetti') {
+        ctx.fillRect(-size / 2, -size / 4, size, size / 2);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    });
+
+    if (state.victoryTiles.length > 0) {
+      const tintFor = (key) => key === 'accentGold'
+        ? palette.accentGold
+        : key === 'accentSecondary'
+          ? palette.accentSecondary
+          : palette.accent;
+      const drawSize = CELL_SIZE - FOOD_DRAW_INSET * 2;
+      state.victoryTiles.forEach((tile) => {
+        if (tile.scale <= 0.01 || tile.alpha <= 0.02) return;
+        const tint = tintFor(tile.tintKey);
+        const img = getTintedFoodImage(tile.asset, tint);
+        if (!img) return;
+        ctx.save();
+        ctx.globalAlpha = tile.alpha;
+        ctx.translate(tile.x * CELL_SIZE, tile.y * CELL_SIZE);
+        ctx.rotate(tile.rotation);
+        ctx.scale(tile.scale, tile.scale);
+        ctx.shadowBlur = tile.isLife ? 16 : 10;
+        ctx.shadowColor = hexToRgba(tint, tile.isLife ? 0.8 : 0.55);
+        ctx.drawImage(img, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+        ctx.restore();
+      });
+    }
+
+    if (state.phase === 'countdown') {
+      const elapsed = now - state.countdownStartedAt;
+      const index = Math.floor(elapsed / 1000);
+      const digit = 3 - index;
+      if (digit >= 1) {
+        const tickProgress = (elapsed % 1000) / 1000;
+        const pop = tickProgress < 0.25 ? 1 - tickProgress * 1.2 : 0.7 + (1 - tickProgress) * 0.15;
+        const alpha = Math.min(1, (1 - tickProgress) * 1.6);
+        const fontSize = CELL_SIZE * 5;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `800 ${fontSize}px Atkinson Hyperlegible Next, system-ui, sans-serif`;
+        ctx.translate((BOARD_COLS * CELL_SIZE) / 2, (BOARD_ROWS * CELL_SIZE) / 2);
+        ctx.scale(pop, pop);
+        ctx.shadowBlur = 24;
+        ctx.shadowColor = hexToRgba(palette.accentSecondary, 0.85);
+        ctx.fillStyle = hexToRgba(palette.textPrimary, 0.98);
+        ctx.fillText(String(digit), 0, 0);
+        ctx.restore();
+      }
+    }
+
+    if (state.phase === 'exploding') {
+      const elapsed = now - state.explosionStartedAt;
+      const appear = Math.max(0, Math.min(1, (elapsed - 1600) / 260));
+      const fade = Math.max(0, Math.min(1, 1 - (elapsed - 4200) / 800));
+      const titleAlpha = Math.min(appear, fade);
+      if (titleAlpha > 0.01) {
+        const pop = 0.7 + appear * 0.4 - Math.max(0, appear - 0.7) * 0.12;
+        const bob = Math.sin(elapsed / 180) * 3;
+        const hue = (elapsed / 6) % 360;
+        const fontSize = CELL_SIZE * 3;
+        const cx = (BOARD_COLS * CELL_SIZE) / 2;
+        const cy = (BOARD_ROWS * CELL_SIZE) / 2;
+        ctx.save();
+        ctx.globalAlpha = titleAlpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.translate(cx, cy + bob);
+        ctx.scale(pop, pop);
+        ctx.shadowBlur = 28;
+        ctx.shadowColor = `hsla(${hue}, 100%, 60%, 0.95)`;
+        ctx.fillStyle = hexToRgba(palette.textPrimary, 0.98);
+        ctx.font = `900 ${fontSize}px Atkinson Hyperlegible Next, system-ui, sans-serif`;
+        ctx.fillText('YOU WIN', 0, -fontSize * 0.2);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = hexToRgba(palette.accentGold, 0.94);
+        ctx.font = '700 16px Atkinson Hyperlegible Next, system-ui, sans-serif';
+        ctx.fillText(state.winTagline, 0, fontSize * 0.55);
+        ctx.restore();
+      }
+    } else if (state.phase === 'gameover') {
+      const elapsed = now - state.gameOverStartedAt;
+      const settle = Math.min(1, elapsed / 260);
+      const scale = 0.6 + settle * 0.45 - Math.max(0, settle - 0.7) * 0.15;
+      const alpha = Math.max(0, Math.min(1, settle * 1.2 - Math.max(0, elapsed - 2400) / 800));
+      const fontSize = CELL_SIZE * 2.2;
+      const cx = (BOARD_COLS * CELL_SIZE) / 2;
+      const cy = (BOARD_ROWS * CELL_SIZE) / 2;
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.55, alpha);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, BOARD_COLS * CELL_SIZE, BOARD_ROWS * CELL_SIZE);
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.shadowBlur = 26;
+      ctx.shadowColor = 'rgba(231, 76, 60, 0.9)';
+      ctx.fillStyle = hexToRgba(palette.textPrimary, 0.98);
+      ctx.font = `800 ${fontSize}px Atkinson Hyperlegible Next, system-ui, sans-serif`;
+      ctx.fillText('GAME OVER', 0, -fontSize * 0.2);
+      ctx.shadowBlur = 0;
+      ctx.font = '600 14px Atkinson Hyperlegible Next, system-ui, sans-serif';
+      ctx.fillStyle = hexToRgba(palette.textSecondary, 0.92);
+      ctx.fillText(`Final score ${state.score}`, 0, fontSize * 0.7);
+      ctx.restore();
+    } else if (state.bannerUntil > now) {
+      const alpha = Math.min(1, (state.bannerUntil - now) / 1200);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = hexToRgba(palette.accentSecondary, 0.16);
+      ctx.fillRect(34, 16, BOARD_COLS * CELL_SIZE - 68, 38);
+      ctx.strokeStyle = hexToRgba(palette.border, 0.8);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(34.5, 16.5, BOARD_COLS * CELL_SIZE - 69, 37);
+      ctx.fillStyle = hexToRgba(palette.textPrimary, 0.95);
+      ctx.font = '700 15px Atkinson Hyperlegible Next, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`LEVEL ${state.level}`, (BOARD_COLS * CELL_SIZE) / 2, 40);
+      ctx.restore();
+    }
+  }
+
+  function loop(now) {
+    if (destroyed) return;
+    ensureBoardDpr();
+    updateParticles();
+    if (state.phase === 'exploding') updateVictoryTiles(now);
+
+    if (state.phase === 'running') {
+      if (!state.lastTickAt) state.lastTickAt = now;
+      if (now - state.lastTickAt >= state.stepMs) {
+        state.lastTickAt = now;
+        stepGame();
+      }
+    } else if (state.phase === 'countdown' && now - state.countdownStartedAt >= 3000) {
+      beginRound(false);
+    } else if (state.phase === 'respawning' && now >= state.respawnAt) {
+      beginRound(true);
+    } else if (state.phase === 'exploding' && now - state.explosionStartedAt > 5200) {
+      state.phase = 'idle';
+      state.started = false;
+      state.victoryTiles = [];
+      state.message = 'Legendary victory archived. Press Start to begin again.';
+      updateHud();
+    } else if (state.phase === 'gameover' && now - state.gameOverStartedAt > 3200) {
+      state.phase = 'idle';
+      state.message = 'Press Start to begin. Arrow keys or WASD to move.';
+      updateHud();
+    }
+
+    drawBoard(now);
+    animationFrameId = requestAnimationFrame(loop);
+  }
+
+  function handleDirectionInput(dx, dy) {
+    if (state.phase !== 'running') return;
+    const current = state.direction;
+    if (dx === -current.x && dy === -current.y) return;
+    state.nextDirection = { x: dx, y: dy };
+  }
+
+  function handleKeyDown(e) {
+    if (destroyed || !overlay.isConnected) return;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+    switch (e.key.toLowerCase()) {
+      case 'arrowup':
+      case 'w':
+        e.preventDefault();
+        handleDirectionInput(0, -1);
+        break;
+      case 'arrowdown':
+      case 's':
+        e.preventDefault();
+        handleDirectionInput(0, 1);
+        break;
+      case 'arrowleft':
+      case 'a':
+        e.preventDefault();
+        handleDirectionInput(-1, 0);
+        break;
+      case 'arrowright':
+      case 'd':
+        e.preventDefault();
+        handleDirectionInput(1, 0);
+        break;
+      case 'enter':
+        if (!state.started) {
+          e.preventDefault();
+          startGame();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  startBtn.addEventListener('click', () => startGame());
+  quitBtn.addEventListener('click', () => quitGame());
+  document.addEventListener('keydown', handleKeyDown);
+
+  resetGameStateForNewRun();
+  renderLeaderboard();
+  updateHud();
+  ensureBoardDpr();
+  animationFrameId = requestAnimationFrame(loop);
+
+  const cleanup = () => {
+    if (state.started && !state.runRecorded) {
+      finalizeRun({ won: false, reason: 'popup-close' });
+    }
+    destroyed = true;
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    document.removeEventListener('keydown', handleKeyDown);
+  };
+  cleanup.triggerVictoryDemo = () => {
+    if (destroyed || state.phase !== 'idle') return;
+    state.phase = 'exploding';
+    state.message = 'Victory demo. Enjoy the fireworks.';
+    createVictoryExplosion();
+    updateHud();
+  };
+  return cleanup;
+}
+
+function openBreakTimePopup() {
+  let snakeCleanup = null;
+  const shell = createPopupShell({
+    overlayId: 'break-time-overlay',
+    onClose: () => {
+      snakeCleanup?.();
+    },
+  });
+  if (!shell) return;
+  const { overlay, close } = shell;
+
+  overlay.innerHTML = `
+    <div class="break-time-popup" onclick="event.stopPropagation()">
+      <div class="break-time-popup-header">
+        <div class="break-time-popup-title" id="break-time-title" title="Click to replay the victory animation" role="button" tabindex="0">
+          <span class="settings-expander-summary-icon settings-expander-summary-icon-font shared-asset-icon-snake" aria-hidden="true"></span>
+          <span>Break time</span>
+        </div>
+        ${popupCloseBtnHtml('break-time-close')}
+      </div>
+      <div class="break-time-popup-body">
+        ${getBreakTimeGameHtml()}
+      </div>
+    </div>
+  `;
+
+  overlay.querySelector('#break-time-close')?.addEventListener('click', close);
+  snakeCleanup = initSettingsSnakeGame(overlay);
+  overlay.querySelector('#break-time-title')?.addEventListener('click', () => {
+    snakeCleanup?.triggerVictoryDemo?.();
+  });
+}
+
 function openSettingsPopup() {
   // saveCurrentSettings runs whenever the popup closes, by any route
   // (close button, outside click, Escape). We suppress the shell's default
@@ -14601,7 +15776,9 @@ function openSettingsPopup() {
   const shell = createPopupShell({
     overlayId: 'settings-overlay',
     dismissOnOutsideClick: false,
-    onClose: () => { if (settingsDirty) saveCurrentSettings(); },
+    onClose: () => {
+      if (settingsDirty) saveCurrentSettings();
+    },
   });
   if (!shell) return;
   const overlay = shell.overlay;
@@ -14711,8 +15888,11 @@ function openSettingsPopup() {
 
       <!-- ── Bottom: full-width expanders ── -->
 
-      <details class="settings-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
-        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Accent Colors</summary>
+      <details class="settings-expander settings-expander-custom-icon settings-expander-rainbow" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">
+          <span class="settings-expander-summary-icon settings-expander-summary-icon-rainbow shared-asset-icon-rainbow" aria-hidden="true"></span>
+          <span>Accent Colors</span>
+        </summary>
         <div style="padding:4px 12px 12px">
 
           <div class="settings-row" style="flex-direction:column;align-items:stretch">
@@ -14757,8 +15937,11 @@ function openSettingsPopup() {
         </div>
       </details>
 
-      <details class="settings-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
-        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">Font &amp; Readability</summary>
+      <details class="settings-expander settings-expander-custom-icon" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">
+          <span class="settings-expander-summary-icon settings-expander-summary-icon-font shared-asset-icon-font-read" aria-hidden="true"></span>
+          <span>Font &amp; Readability</span>
+        </summary>
         <div style="padding:4px 12px 12px">
 
           <div style="display:flex;flex-direction:column;gap:10px">
@@ -14804,9 +15987,19 @@ function openSettingsPopup() {
         </div>
       </details>
 
+      <details class="settings-expander settings-expander-custom-icon" id="settings-snake-expander" style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:var(--fs-13);font-weight:600;color:var(--text-primary);user-select:none">
+          <span class="settings-expander-summary-icon settings-expander-summary-icon-font shared-asset-icon-snake" aria-hidden="true"></span>
+          <span>Break time</span>
+        </summary>
+        <div style="padding:10px 12px 14px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <button class="btn-sm btn-primary" id="settings-open-break-time">Help a critter get a decent meal</button>
+        </div>
+      </details>
+
       <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-          <img src="icons/danger.svg" alt="" style="width:16px;height:16px;filter:brightness(0) saturate(100%) invert(40%) sepia(90%) saturate(2000%) hue-rotate(345deg)">
+          <span style="color:var(--error);display:inline-flex;align-items:center">${sharedAssetIconHtml('shared-asset-icon-danger', 16)}</span>
           <span style="font-size:var(--fs-13);font-weight:600;color:var(--error)">Danger Zone</span>
         </div>
         <button class="btn-sm" id="settings-reset-project" style="background:var(--btn-danger);color:var(--error);border-color:var(--error);font-size:var(--fs-11)">Reset Project</button>
@@ -14998,6 +16191,9 @@ function openSettingsPopup() {
 
   document.getElementById('btn-install-update').addEventListener('click', async () => {
     await window.api.installUpdate();
+  });
+  document.getElementById('settings-open-break-time')?.addEventListener('click', () => {
+    openBreakTimePopup();
   });
 }
 
