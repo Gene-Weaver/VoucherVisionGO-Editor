@@ -75,11 +75,13 @@
   --accent: #2ecc71;
   --accent-secondary: #CA50F7;
   --accent-hover: #27ae60;
+  --accent-escalation: #648FFF;
   /* --success: #48ca48; */
   --success: #2ecc71;
   --success-dim: #2d7a2d;
   --warning: #f6a14f;
-  --error: #ff5252;
+  --error: #DC267F;
+  /* --error: #ff5252; */
   --border: #3a3a3a;
   --border-focus: #2ecc71;
 
@@ -150,8 +152,9 @@
   --accent-coral: #ff8c5c;
   --text-update-green: #4caf50;
   --text-dark-green: #08120b;
-  --status-error-light: #e04545;
-
+  --status-error-light: #DC267F; 
+  /* DC267F */
+  /* e04545 */
   /* Button backgrounds */
   --btn-export: #8b4513;
   --btn-danger: #3a1515;
@@ -474,11 +477,38 @@ textarea { resize: vertical; min-height: 60px; }
 /* ── Folder Picker View ────────────────────────────────── */
 
 #folder-picker-view {
+  position: relative;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 24px;
   padding: 40px;
+}
+
+#picker-update-section {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, calc(100% - 48px));
+  text-align: center;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+#picker-update-section .picker-update-info {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+#picker-update-section .picker-update-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
 }
 
 .picker-logo {

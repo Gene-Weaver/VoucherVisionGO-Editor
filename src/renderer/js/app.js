@@ -90,6 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.api.onUpdateStatus((data) => {
       APP.updateStatus = data;
       updateSettingsUpdateUI(data);
+      updatePickerUpdateUI(data);
       if (data.status === 'available' || data.status === 'available-manual') {
         showUpdateNotification(data);
       }
@@ -377,6 +378,20 @@ function renderFolderPicker() {
     </div>
     <button class="btn-primary picker-btn" id="picker-open-btn">Open Folder</button>
     <div id="picker-error" style="color:var(--error);font-size:var(--fs-12);margin-top:8px;display:none"></div>
+    <div id="picker-update-section">
+      <div class="picker-update-info">
+        <div>Current version: <span id="picker-update-current-version" style="font-family:var(--font-mono);color:var(--text-primary)">...</span></div>
+        <div>Installed: <span id="picker-update-install-date" style="color:var(--text-muted)">...</span></div>
+        <div>Last checked: <span id="picker-update-last-check" style="color:var(--text-muted)">...</span></div>
+        <div id="picker-update-status-line" style="margin-top:6px"></div>
+      </div>
+      <div class="picker-update-buttons">
+        <button class="btn-sm btn-primary" id="picker-btn-check-update" style="font-size:var(--fs-11)">Check for Updates</button>
+        <button class="btn-sm" id="picker-btn-download-update" style="font-size:var(--fs-11);display:none">Download Update</button>
+        <button class="btn-sm" id="picker-btn-install-update" style="font-size:var(--fs-11);display:none;background:var(--btn-success);color:var(--text-update-green);border-color:var(--text-update-green)">Restart to Update</button>
+        <a id="picker-btn-github-releases" href="#" style="font-size:var(--fs-11);color:var(--accent);text-decoration:none">View releases on GitHub &#x2197;</a>
+      </div>
+    </div>
   `;
   document.getElementById('picker-open-btn').addEventListener('click', () => {
     const nameInput = document.getElementById('picker-username');
@@ -398,6 +413,48 @@ function renderFolderPicker() {
   requestAnimationFrame(() => {
     const nameInput = document.getElementById('picker-username');
     nameInput?.focus();
+  });
+
+  // ── Update section wiring ──
+  (async () => {
+    try {
+      const info = await window.api.getUpdateInfo();
+      const curEl = document.getElementById('picker-update-current-version');
+      const instEl = document.getElementById('picker-update-install-date');
+      const lastEl = document.getElementById('picker-update-last-check');
+      if (curEl) curEl.textContent = 'v' + info.currentVersion;
+      if (instEl) instEl.textContent = info.installDate ? new Date(info.installDate).toLocaleDateString() : 'Unknown';
+      if (lastEl) lastEl.textContent = info.lastUpdateCheck ? timeAgo(info.lastUpdateCheck) : 'Never';
+    } catch {}
+    if (APP.updateStatus) updatePickerUpdateUI(APP.updateStatus);
+  })();
+
+  document.getElementById('picker-btn-github-releases').addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open('https://github.com/Gene-Weaver/VoucherVisionGO-Editor/releases', '_blank');
+  });
+
+  document.getElementById('picker-btn-check-update').addEventListener('click', async () => {
+    const btn = document.getElementById('picker-btn-check-update');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    const result = await window.api.checkForUpdate();
+    if (result.status !== 'checking') {
+      updatePickerUpdateUI(result);
+      btn.disabled = false;
+      btn.textContent = 'Check for Updates';
+    }
+    const lastEl = document.getElementById('picker-update-last-check');
+    if (lastEl) lastEl.textContent = 'Just now';
+  });
+
+  document.getElementById('picker-btn-download-update').addEventListener('click', async () => {
+    document.getElementById('picker-btn-download-update').style.display = 'none';
+    await window.api.downloadUpdate();
+  });
+
+  document.getElementById('picker-btn-install-update').addEventListener('click', async () => {
+    await window.api.installUpdate();
   });
 }
 
@@ -615,7 +672,7 @@ async function loadFolder(folderPath) {
     };
     for (const spec of next.specimens) {
       if (allInProgress[spec.filename]) {
-        next.state.specimens[spec.filename] = allInProgress[spec.filename];
+        next.state.specimens[spec.filename] = ensureSpecimenFlagStateDefaults(allInProgress[spec.filename]);
       }
     }
 
@@ -758,6 +815,7 @@ async function migrateFromLegacy(folderPath) {
           flagged: specState.flagged || false,
           flag_note: specState.flag_note || '',
           flag_tags: specState.flag_tags || [],
+          escalation_tags: specState.escalation_tags || [],
           status: specState.status || 'in_progress',
         };
         await window.api.writeInProgress(folderPath, filename, ipData);
@@ -828,8 +886,27 @@ function initSpecimenState(filename) {
     flagged: false,
     flag_note: '',
     flag_tags: [],
+    escalation_tags: [],
     last_touched: new Date().toISOString()
   };
+}
+
+function ensureSpecimenFlagStateDefaults(specState) {
+  if (!specState || typeof specState !== 'object') return specState;
+  if (!Array.isArray(specState.flag_tags)) specState.flag_tags = [];
+  if (!Array.isArray(specState.escalation_tags)) specState.escalation_tags = [];
+  if (typeof specState.flag_note !== 'string') specState.flag_note = '';
+  if (typeof specState.flagged !== 'boolean') specState.flagged = false;
+  specState.flagged = shouldSpecimenBeFlagged(specState);
+  return specState;
+}
+
+function shouldSpecimenBeFlagged(specState) {
+  if (!specState) return false;
+  const note = typeof specState.flag_note === 'string' ? specState.flag_note.trim() : '';
+  const tags = Array.isArray(specState.flag_tags) ? specState.flag_tags : [];
+  const escalations = Array.isArray(specState.escalation_tags) ? specState.escalation_tags : [];
+  return tags.length > 0 || escalations.length > 0 || note.length > 0;
 }
 
 // ── Progress Tracker ────────────────────────────────────────
@@ -13637,6 +13714,45 @@ function updateSettingsUpdateUI(data) {
   const btnDownload = document.getElementById('btn-download-update');
   const btnInstall = document.getElementById('btn-install-update');
   const btnCheck = document.getElementById('btn-check-update');
+  if (!statusLine) return;
+
+  switch (data.status) {
+    case 'checking':
+      statusLine.innerHTML = '<span style="color:var(--text-muted)">Checking for updates...</span>';
+      break;
+    case 'available':
+      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span>`;
+      if (btnDownload) { btnDownload.style.display = ''; btnDownload.textContent = 'Download Update'; }
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'available-manual':
+      statusLine.innerHTML = `<span style="color:var(--accent)">&#9432; Update available: v${escapeHtml(data.version)}</span><br><span style="color:var(--text-muted);font-size:var(--fs-11)">Portable build — download from GitHub Releases</span>`;
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'up-to-date':
+      statusLine.innerHTML = '<span style="color:var(--text-update-green)">&#10003; You are up to date</span>';
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+    case 'downloading':
+      statusLine.innerHTML = `<span style="color:var(--text-muted)">Downloading... ${Math.round(data.percent || 0)}%</span>`;
+      break;
+    case 'downloaded':
+      statusLine.innerHTML = `<span style="color:var(--text-update-green)">&#10003; Update v${escapeHtml(data.version)} ready to install</span>`;
+      if (btnDownload) btnDownload.style.display = 'none';
+      if (btnInstall) btnInstall.style.display = '';
+      break;
+    case 'error':
+      statusLine.innerHTML = `<span style="color:var(--error)">Update check failed: ${escapeHtml(data.message || 'Unknown error')}</span>`;
+      if (btnCheck) { btnCheck.disabled = false; btnCheck.textContent = 'Check for Updates'; }
+      break;
+  }
+}
+
+function updatePickerUpdateUI(data) {
+  const statusLine = document.getElementById('picker-update-status-line');
+  const btnDownload = document.getElementById('picker-btn-download-update');
+  const btnInstall = document.getElementById('picker-btn-install-update');
+  const btnCheck = document.getElementById('picker-btn-check-update');
   if (!statusLine) return;
 
   switch (data.status) {
