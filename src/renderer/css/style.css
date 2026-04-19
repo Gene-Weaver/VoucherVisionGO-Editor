@@ -80,7 +80,7 @@
   --success: #2ecc71;
   --success-dim: #2d7a2d;
   --warning: #f6a14f;
-  --error: #DC267F;
+  --error: #dc26c1;
   /* --error: #ff5252; */
   --border: #3a3a3a;
   --border-focus: #2ecc71;
@@ -152,7 +152,7 @@
   --accent-coral: #ff8c5c;
   --text-update-green: #4caf50;
   --text-dark-green: #08120b;
-  --status-error-light: #DC267F; 
+  --status-error-light: var(--error); 
   /* DC267F */
   /* e04545 */
   /* Button backgrounds */
@@ -194,6 +194,15 @@
   --error-tint-08: rgba(255, 82, 82, 0.08);
   --error-tint-12: rgba(255, 82, 82, 0.12);
   --error-tint-35: rgba(255, 82, 82, 0.35);
+
+  /* Flag flair pill colors */
+  --flag-pill-bg: rgba(252, 82, 255, 0.12);
+  --flag-pill-border: rgba(246, 82, 255, 0.35);
+  --flag-pill-text: var(--error);
+  
+  --flag-pill-escalation-bg: rgba(100,143,255,0.10);
+  --flag-pill-escalation-border: rgba(100,143,255,0.35);
+  --flag-pill-escalation-text: var(--accent-escalation);
 
   /* Header green tint */
   --header-green-tint: rgba(45, 122, 45, 0.15);
@@ -2069,7 +2078,7 @@ textarea { resize: vertical; min-height: 60px; }
   cursor: pointer;
 }
 .flag-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
-.flag-btn.flagged { color: var(--error); border-color: var(--error-tint-35); }
+.flag-btn.flagged { color: var(--error); border-color: var(--flag-pill-border); }
 .flag-btn.flagged:hover { color: var(--error); }
 
 /* ── Batch Table View ──────────────────────────────────── */
@@ -2551,7 +2560,7 @@ textarea { resize: vertical; min-height: 60px; }
 .status-badge.reviewed { background: var(--success-dim); color: var(--success); }
 .status-badge.in-progress { background: var(--bg-warning); color: var(--warning); }
 .status-badge.not-started { background: var(--bg-tertiary); color: var(--text-muted); }
-.status-badge.flagged { background: var(--bg-error); color: var(--error); }
+.status-badge.flagged { background: var(--flag-pill-bg); color: var(--error); }
 
 /* ── Focus View ────────────────────────────────────────── */
 
@@ -5403,15 +5412,15 @@ textarea { resize: vertical; min-height: 60px; }
   font-size: var(--fs-10);
   padding: 2px 4px 2px 8px;
   border-radius: 999px;
-  background: var(--error-tint-12);
-  border: 1px solid var(--error-tint-35);
-  color: var(--error);
+  background: var(--flag-pill-bg);
+  border: 1px solid var(--flag-pill-border);
+  color: var(--flag-pill-text);
   white-space: nowrap;
 }
 .flag-tag-pill-escalation {
-  background: rgba(100,143,255,0.10);
-  border-color: rgba(100,143,255,0.35);
-  color: var(--accent-escalation);
+  background: var(--flag-pill-escalation-bg);
+  border-color: var(--flag-pill-escalation-border);
+  color: var(--flag-pill-escalation-text);
 }
 .flag-tag-pill-x {
   background: transparent;
