@@ -520,6 +520,119 @@ textarea { resize: vertical; min-height: 60px; }
   justify-content: center;
   gap: 24px;
   padding: 40px;
+  overflow: hidden;
+}
+
+#folder-picker-view > *:not(.picker-stripes):not(#picker-update-section) {
+  position: relative;
+  z-index: 1;
+}
+
+.picker-stripes {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 2px;
+  padding: 0 4px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.picker-stripe {
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.035) 30%,
+    rgba(202, 80, 247, 0.05) 55%,
+    rgba(255, 255, 255, 0.035) 80%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform-origin: center;
+  will-change: transform, translate;
+  translate: 0 0;
+  transition: translate 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: picker-stripe-wiggle 7.5s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * -0.19s);
+}
+
+@keyframes picker-stripe-wiggle {
+  0%, 100% { transform: translateX(0) scaleY(1); }
+  25%      { transform: translateX(-6px) scaleY(0.97); }
+  50%      { transform: translateX(0) scaleY(1.04); }
+  75%      { transform: translateX(6px) scaleY(0.98); }
+}
+
+/* Curtain-loader mode: active only while the splash is visible AND a spinner
+   is up. Overrides the idle wiggle with an outward-radiating pulse, fades the
+   splash foreground, and hides the default ring so the stripes carry the
+   load. Scoped via body.is-loading + picker-view.active so other spinner
+   usages (saves, reloads) still show the ring normally. */
+body.is-loading #folder-picker-view.active > *:not(.picker-stripes) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 350ms ease;
+}
+
+body.is-loading #folder-picker-view.active .picker-stripe {
+  animation: picker-stripe-wave 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation-delay: calc(var(--offset, 0) * 55ms);
+  transition: none;
+}
+
+@keyframes picker-stripe-wave {
+  0%   { transform: translateX(0) scaleY(1); filter: brightness(1) saturate(1); }
+  35%  { transform: translateX(calc(var(--dir, 0) * 18px)) scaleY(1.08); filter: brightness(1.45) saturate(1.4); }
+  65%  { transform: translateX(calc(var(--dir, 0) * 10px)) scaleY(0.96); filter: brightness(1.15) saturate(1.2); }
+  100% { transform: translateX(0) scaleY(1); filter: brightness(1) saturate(1); }
+}
+
+body.is-loading #folder-picker-view.active::before {
+  content: '';
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(202, 80, 247, 0.55) 35%,
+    rgba(255, 255, 255, 0.75) 50%,
+    rgba(202, 80, 247, 0.55) 65%,
+    transparent 100%
+  );
+  box-shadow: 0 0 24px 4px rgba(202, 80, 247, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+  animation: picker-beam-breathe 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes picker-beam-breathe {
+  0%, 100% { opacity: 0; transform: scaleY(0.6); }
+  35%      { opacity: 0.9; transform: scaleY(1); }
+  65%      { opacity: 0.4; transform: scaleY(0.95); }
+}
+
+body.is-loading:has(#folder-picker-view.active) .global-spinner-ring {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .picker-stripe { animation: none; }
+  body.is-loading #folder-picker-view.active .picker-stripe {
+    animation: picker-stripe-pulse 1.6s ease-in-out infinite;
+    animation-delay: 0s;
+    transform: none !important;
+  }
+  body.is-loading #folder-picker-view.active::before { animation: none; opacity: 0.5; }
+  @keyframes picker-stripe-pulse {
+    0%, 100% { filter: brightness(1); }
+    50%      { filter: brightness(1.4); }
+  }
 }
 
 #picker-update-section {
@@ -531,6 +644,7 @@ textarea { resize: vertical; min-height: 60px; }
   text-align: center;
   border-top: 1px solid var(--border);
   padding-top: 14px;
+  z-index: 1;
 }
 
 #picker-update-section .picker-update-info {

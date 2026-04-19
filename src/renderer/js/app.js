@@ -71,6 +71,11 @@ function isDemoMode() {
 
 let _spinnerCount = 0;
 
+const _CURTAIN_MIN_MS = 1500;
+let _curtainStartedAt = 0;
+let _pendingViewSwitch = null;
+let _curtainRemovalPending = false;
+
 function showNavSpinner() {
   _spinnerCount++;
   if (_spinnerCount === 1) {
@@ -83,6 +88,8 @@ function showNavSpinner() {
       document.body.appendChild(el);
     }
     el.style.display = '';
+    document.body.classList.add('is-loading');
+    _curtainStartedAt = performance.now();
   }
 }
 
@@ -91,6 +98,11 @@ function hideNavSpinner() {
   if (_spinnerCount === 0) {
     const el = document.getElementById('global-spinner');
     if (el) el.style.display = 'none';
+    if (_pendingViewSwitch) {
+      _curtainRemovalPending = true;
+    } else {
+      document.body.classList.remove('is-loading');
+    }
   }
 }
 
@@ -116,6 +128,29 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── View Switching ──────────────────────────────────────────
 
 function showView(viewName) {
+  // Hold the splash curtain on-screen for at least _CURTAIN_MIN_MS so the
+  // stripe animation is always perceptible, even when the folder loads
+  // faster than the animation cycle.
+  if (
+    APP.currentView === 'folder-picker' &&
+    viewName !== 'folder-picker' &&
+    document.body.classList.contains('is-loading')
+  ) {
+    const remaining = _CURTAIN_MIN_MS - (performance.now() - _curtainStartedAt);
+    if (remaining > 0) {
+      clearTimeout(_pendingViewSwitch);
+      _pendingViewSwitch = setTimeout(() => {
+        _pendingViewSwitch = null;
+        showView(viewName);
+        if (_curtainRemovalPending) {
+          _curtainRemovalPending = false;
+          document.body.classList.remove('is-loading');
+        }
+      }, remaining);
+      return;
+    }
+  }
+
   // Save table scroll position before leaving table view
   if (APP.currentView === 'table' && viewName !== 'table') {
     const wrapper = document.querySelector('.batch-table-wrapper');
@@ -380,9 +415,107 @@ function refreshReviewStatusBadge() {
 
 // ── Folder Picker ───────────────────────────────────────────
 
+let _pickerStripeCleanup = null;
+function setupPickerStripeGravity(viewEl) {
+  const stripes = Array.from(viewEl.querySelectorAll('.picker-stripe'));
+  if (stripes.length === 0) return () => {};
+  const SIGMA = 120;
+  const STRENGTH = 0.6;
+  const AUTO_SPEED_PX_S = 20;
+  const AUTO_START_X = [100, 1000];
+
+  let realCursorX = null;
+  let phantoms = AUTO_START_X.slice();
+  let lastFrameT = 0;
+  let rafId = null;
+  let stopped = false;
+
+  const tick = (now) => {
+    rafId = null;
+    if (stopped) return;
+
+    if (document.body.classList.contains('is-loading')) {
+      // Curtain mode owns the stripe transforms — suspend the loop
+      // (it resumes on the next mousemove) and zero translations.
+      realCursorX = null;
+      lastFrameT = 0;
+      for (const s of stripes) s.style.translate = '0 0';
+      return;
+    }
+
+    // Advance the two standing-wave phantoms every frame, regardless of
+    // the real cursor. They wrap from the right edge back past the left
+    // so both waves are perpetually traversing the splash.
+    const dt = lastFrameT ? (now - lastFrameT) / 1000 : 0;
+    lastFrameT = now;
+    const rect = viewEl.getBoundingClientRect();
+    const rightBound = rect.right + SIGMA * 2;
+    const leftWrap = rect.left - SIGMA * 2;
+    phantoms = phantoms.map(x => {
+      const nx = x + AUTO_SPEED_PX_S * dt;
+      return nx > rightBound ? leftWrap : nx;
+    });
+
+    // Stack real cursor on top of the phantoms — pulls combine additively.
+    const sources = realCursorX !== null ? phantoms.concat(realCursorX) : phantoms;
+
+    for (const s of stripes) {
+      const r = s.getBoundingClientRect();
+      const center = r.left + r.width / 2;
+      let pull = 0;
+      for (let i = 0; i < sources.length; i++) {
+        const dx = center - sources[i];
+        pull += -dx * Math.exp(-(dx * dx) / (SIGMA * SIGMA)) * STRENGTH;
+      }
+      s.style.translate = `${pull.toFixed(2)}px 0`;
+    }
+
+    rafId = requestAnimationFrame(tick);
+  };
+
+  const kick = () => {
+    if (rafId === null) rafId = requestAnimationFrame(tick);
+  };
+
+  const onMove = (e) => {
+    if (document.body.classList.contains('is-loading')) {
+      realCursorX = null;
+      return;
+    }
+    realCursorX = e.clientX;
+    kick();
+  };
+  const onLeave = () => {
+    realCursorX = null;
+    kick();
+  };
+
+  viewEl.addEventListener('mousemove', onMove);
+  viewEl.addEventListener('mouseleave', onLeave);
+
+  // Kick off immediately so phantoms can appear without any prior move.
+  kick();
+
+  return () => {
+    stopped = true;
+    viewEl.removeEventListener('mousemove', onMove);
+    viewEl.removeEventListener('mouseleave', onLeave);
+    if (rafId !== null) cancelAnimationFrame(rafId);
+  };
+}
+
 function renderFolderPicker() {
   const el = document.getElementById('folder-picker-view');
+  _pickerStripeCleanup?.();
+  const stripesHtml = `<div class="picker-stripes" aria-hidden="true">${
+    Array.from({ length: 37 }, (_, i) => {
+      const offset = Math.abs(i - 18);
+      const dir = i < 18 ? -1 : i > 18 ? 1 : 0;
+      return `<span class="picker-stripe" style="--i:${i};--offset:${offset};--dir:${dir}"></span>`;
+    }).join('')
+  }</div>`;
   el.innerHTML = `
+    ${stripesHtml}
     <div class="picker-logo">VoucherVisionGO Editor</div>
     <div class="picker-subtitle" style="text-align:left">
       <div style="margin-bottom:6px">&mdash; Select a folder containing VoucherVisionGO JSON output files to begin reviewing specimens.</div>
@@ -431,6 +564,8 @@ function renderFolderPicker() {
     const nameInput = document.getElementById('picker-username');
     nameInput?.focus();
   });
+
+  _pickerStripeCleanup = setupPickerStripeGravity(el);
 
   // ── Update section wiring ──
   (async () => {
