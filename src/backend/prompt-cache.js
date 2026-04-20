@@ -70,6 +70,24 @@ async function fetchFromGitHub(promptName) {
   return await res.text();
 }
 
+// Parse a single `custom_flags` entry into a { key, pill, label } record.
+// Syntax: `(PILL) rest of label`. `PILL` becomes the chip text and the stable
+// key; `rest of label` is shown in the dropdown. Without parens, the whole
+// string serves as key/pill/label (legacy-compatible).
+function parseCustomFlag(raw) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s) return null;
+  const m = s.match(/^\(([^)]+)\)\s*(.*)$/);
+  if (m) {
+    const pill = m[1].trim();
+    if (!pill) return null;
+    const label = m[2].trim() || pill;
+    return { key: pill, pill, label };
+  }
+  return { key: s, pill: s, label: s };
+}
+
 function parsePromptYaml(rawYaml, promptName) {
   const doc = yaml.load(rawYaml);
 
@@ -89,6 +107,7 @@ function parsePromptYaml(rawYaml, promptName) {
     checklist: doc.checklist || [],
     review_not_required: doc.review_not_required || [],
     field_default_values: doc.field_default_values || {},
+    custom_flags: Array.isArray(doc.custom_flags) ? doc.custom_flags.map(parseCustomFlag).filter(Boolean) : [],
     raw: rawYaml
   };
 }

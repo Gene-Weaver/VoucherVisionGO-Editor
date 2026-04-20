@@ -35,7 +35,7 @@ const APP = {
   updateStatus: null,
   dirtySpecimens: new Set(),    // Filenames with unsaved in-progress changes
   dirtyProject: false,          // Whether project state needs saving
-  progressDisplayMode: 'specimens',
+  progressDisplayMode: 'cells',
 };
 
 // ── Constants ───────────────────────────────────────────────
@@ -281,6 +281,7 @@ function updateNavBar() {
     pathEl.onclick = async () => {
       try {
         await navigator.clipboard.writeText(APP.folderPath);
+        showBriefToast('Project path copied to clipboard');
       } catch (err) {
         console.warn('Failed to copy folder path:', err);
       }
@@ -6467,14 +6468,18 @@ const FLAG_TOOL_LABELS = {
   find: 'Find',
 };
 
-const ESCALATION_STATUS_LABELS = {
-  type: 'Type',
-  exsiccatae: 'Exsiccatae',
-  photograph: 'Photograph',
-  multiple: 'Multiple',
-  filename_catalog_mismatch: 'Filename/catalog mismatch',
-  barcode: 'Barcode',
-  bad_image: 'Bad Image',
+// Each escalation def has a short `pill` (chip text) and a long `label`
+// (dropdown menu text). Keeping them identical here preserves current UI;
+// shorten individual pills in place as needed. Custom flags from the prompt
+// YAML are parsed into the same shape in prompt-cache.js.
+const ESCALATION_STATUS_DEFS = {
+  type:                      { pill: 'Type',                       label: 'Type Specimen' },
+  exsiccatae:                { pill: 'Exsiccatae',                 label: 'Exsiccatae' },
+  photograph:                { pill: 'Photograph',                 label: 'Photograph of Specimen' },
+  multiple:                  { pill: 'Multiple',                   label: 'Multiple Specimens' },
+  filename_catalog_mismatch: { pill: 'Mismatch',                   label: 'Filename X Catalog Number Mismatch' },
+  barcode:                   { pill: 'Barcode',                    label: 'Barcode Error' },
+  bad_image:                 { pill: 'Bad Image',                  label: 'Image Focus/Mistake' },
 };
 
 const ESCALATION_STATUS_ORDER = [
@@ -6486,6 +6491,13 @@ const ESCALATION_STATUS_ORDER = [
   'barcode',
   'bad_image',
 ];
+
+function getEscalationDef(key) {
+  if (ESCALATION_STATUS_DEFS[key]) return ESCALATION_STATUS_DEFS[key];
+  const cf = (APP.currentPrompt?.custom_flags || []).find(f => f && f.key === key);
+  if (cf) return { pill: cf.pill, label: cf.label };
+  return { pill: key, label: key };
+}
 
 function getSpecimenTags(filename) {
   ensureSpecimenFlagStateDefaults(APP.state.specimens?.[filename]);
@@ -6543,14 +6555,20 @@ function syncSpecimenFlaggedState(filename) {
 
 function getFlagFlairLabel(kind, key) {
   return kind === 'escalation'
-    ? (ESCALATION_STATUS_LABELS[key] || key)
+    ? getEscalationDef(key).label
     : (FLAG_TOOL_LABELS[key] || key);
 }
 
 function getSpecimenFlairItems(filename) {
   return [
-    ...getSpecimenTags(filename).map(key => ({ kind: 'tool', key, label: getFlagFlairLabel('tool', key) })),
-    ...getSpecimenEscalations(filename).map(key => ({ kind: 'escalation', key, label: getFlagFlairLabel('escalation', key) })),
+    ...getSpecimenTags(filename).map(key => {
+      const label = getFlagFlairLabel('tool', key);
+      return { kind: 'tool', key, pill: label, label };
+    }),
+    ...getSpecimenEscalations(filename).map(key => {
+      const def = getEscalationDef(key);
+      return { kind: 'escalation', key, pill: def.pill, label: def.label };
+    }),
   ];
 }
 
@@ -6561,7 +6579,8 @@ function renderFlagFlairPillHtml(filename, item, { small = false } = {}) {
     item.kind === 'escalation' ? 'flag-tag-pill-escalation' : '',
   ].filter(Boolean).join(' ');
   const title = `Remove ${item.label}`;
-  return `<span class="${classes}">${escapeHtml(item.label)}<button class="flag-tag-pill-x" data-file="${escapeAttr(filename)}" data-kind="${escapeAttr(item.kind)}" data-key="${escapeAttr(item.key)}" title="${escapeAttr(title)}"><img src="icons/close.svg" alt="×"></button></span>`;
+  const pillText = item.pill || item.label;
+  return `<span class="${classes}" title="${escapeAttr(item.label)}">${escapeHtml(pillText)}<button class="flag-tag-pill-x" data-file="${escapeAttr(filename)}" data-kind="${escapeAttr(item.kind)}" data-key="${escapeAttr(item.key)}" title="${escapeAttr(title)}"><img src="icons/close.svg" alt="×"></button></span>`;
 }
 
 function removeFlairItemFromSpecimen(filename, kind, key) {
@@ -6604,18 +6623,26 @@ function tagIconSvg(size = 11) {
 
 function renderEscalationMenuItemsHtml(filename) {
   const escalations = new Set(getSpecimenEscalations(filename));
-  return ESCALATION_STATUS_ORDER.map((key) => {
+  const customFlags = Array.isArray(APP.currentPrompt?.custom_flags) ? APP.currentPrompt.custom_flags : [];
+  const customKeys = customFlags.map(f => f && f.key).filter(Boolean);
+  // Custom flags from the prompt come first, then standard escalation order.
+  // Dedup so a custom key that collides with a standard key doesn't double up.
+  const order = [...new Set([...customKeys, ...ESCALATION_STATUS_ORDER])];
+  return order.map((key) => {
     const active = escalations.has(key);
+    const isCustom = !ESCALATION_STATUS_DEFS[key];
+    const def = getEscalationDef(key);
     return `
       <span
         role="menuitemcheckbox"
         tabindex="0"
         aria-checked="${active ? 'true' : 'false'}"
-        class="flag-escalation-item ${active ? 'active' : ''}"
+        class="flag-escalation-item ${active ? 'active' : ''}${isCustom ? ' flag-escalation-item-custom' : ''}"
         data-file="${escapeAttr(filename)}"
-        data-escalation="${escapeAttr(key)}">
+        data-escalation="${escapeAttr(key)}"
+        title="${escapeAttr(def.label)}">
         <span class="flag-escalation-check" aria-hidden="true">${active ? '&#10003;' : ''}</span>
-        <span class="flag-escalation-label">${escapeHtml(ESCALATION_STATUS_LABELS[key])}</span>
+        <span class="flag-escalation-label">${escapeHtml(def.label)}</span>
       </span>
     `;
   }).join('');
@@ -6805,7 +6832,7 @@ function toggleEscalationStatus(filename, escalation) {
   if (!filename || !escalation) return;
   if (!APP.state.specimens[filename]) initSpecimenState(filename);
   const st = ensureSpecimenFlagStateDefaults(APP.state.specimens[filename]);
-  const label = ESCALATION_STATUS_LABELS[escalation] || escalation;
+  const label = getEscalationDef(escalation).label;
   const wasActive = specimenHasEscalation(filename, escalation);
   withRewind({
     action: 'tagEscalation',
@@ -14245,13 +14272,17 @@ function _caseTypeLabel(type) {
 // Unified preview+apply engine for case transforms.
 // scope: 'form' (focus/review) or 'table'
 // dryRun: true returns counts only; false performs the mutation under withRewind.
-function transformFieldsBatch(type, scope, { dryRun = false } = {}) {
-  const fields = scope === 'table'
-    ? [getCurrentTableCaseField()].filter(Boolean)
-    : getFieldsForToolScope();
-  const specimens = scope === 'table'
-    ? getTableCaseScopeRows().map(r => APP.specimens[r.index]).filter(Boolean)
-    : getSpecimensForToolScope();
+function transformFieldsBatch(type, scope, { dryRun = false, fieldsOverride = null, specimensOverride = null } = {}) {
+  const fields = fieldsOverride !== null
+    ? fieldsOverride
+    : (scope === 'table'
+      ? [getCurrentTableCaseField()].filter(Boolean)
+      : getFieldsForToolScope());
+  const specimens = specimensOverride !== null
+    ? specimensOverride
+    : (scope === 'table'
+      ? getTableCaseScopeRows().map(r => APP.specimens[r.index]).filter(Boolean)
+      : getSpecimensForToolScope());
 
   const field = scope === 'table' ? (fields[0] || null) : undefined;
 
@@ -14332,7 +14363,18 @@ function confirmTableCaseTransform(type) {
     preview.count > 0
       ? `Apply <strong>${typeLabel}</strong> to <strong>${preview.count}</strong> cell${preview.count !== 1 ? 's' : ''} across <strong>${preview.specimens.length}</strong> specimen${preview.specimens.length !== 1 ? 's' : ''} within <strong>${escapeHtml(preview.field)}</strong>${_tableCurrentFilter ? ' for the current filtered table rows' : ''}.`
       : `No changes would be made by applying <strong>${typeLabel}</strong> within <strong>${escapeHtml(preview.field)}</strong>${_tableCurrentFilter ? ' for the current filtered table rows' : ''}.`,
-    () => { if (preview.count > 0) transformFieldsBatch(type, 'table'); },
+    () => {
+      // Reuse the field + specimens captured during the dry-run. The table
+      // cell selection that getCurrentTableCaseField relies on is killed when
+      // the popup steals focus and the inline editor closes — re-detecting at
+      // apply time would silently no-op the column write.
+      if (preview.count > 0) {
+        transformFieldsBatch(type, 'table', {
+          fieldsOverride: [preview.field],
+          specimensOverride: preview.specimens,
+        });
+      }
+    },
     'Apply'
   );
 }
