@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Build a self-contained demo.html with embedded test data."""
 
+import base64
 import json
+import mimetypes
 import os
+import re
 import urllib.parse
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -10,6 +13,9 @@ TEST_DIR = os.path.join(BASE, 'demo_data')
 OUT_FILE = os.path.join(BASE, 'build', 'demo.html')
 ICON_DIR = os.path.join(BASE, 'src', 'renderer', 'icons')
 PACKAGE_JSON = os.path.join(BASE, 'package.json')
+THEME_DEFAULTS = os.path.join(BASE, 'src', 'shared', 'theme-defaults.js')
+RENDERER_DIR = os.path.join(BASE, 'src', 'renderer')
+CSS_DIR = os.path.join(RENDERER_DIR, 'css')
 
 # Load specimens
 specimens = []
@@ -26,6 +32,10 @@ print(f'Loaded {len(specimens)} specimens')
 with open(os.path.join(BASE, 'src', 'renderer', 'css', 'style.css')) as f:
     css = f.read()
 
+# Load shared theme defaults before app.js, matching src/renderer/index.html
+with open(THEME_DEFAULTS) as f:
+    theme_defaults_js = f.read()
+
 # Load app.js and history.js
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'app.js')) as f:
     app_js = f.read()
@@ -35,6 +45,9 @@ with open(os.path.join(BASE, 'src', 'renderer', 'js', 'history.js')) as f:
 
 with open(os.path.join(BASE, 'src', 'shared', 'completion.js')) as f:
     completion_js = f.read()
+
+with open(os.path.join(BASE, 'src', 'shared', 'special-characters.js')) as f:
+    special_chars_js = f.read()
 
 # Load leaflet
 with open(os.path.join(BASE, 'src', 'renderer', 'js', 'lib', 'leaflet.min.js')) as f:
@@ -68,6 +81,16 @@ def svg_data_url(path):
     return 'data:image/svg+xml;charset=utf-8,' + urllib.parse.quote(svg, safe='')
 
 
+def file_data_url(path):
+    mime_type, _ = mimetypes.guess_type(path)
+    mime_type = mime_type or 'application/octet-stream'
+    if path.endswith('.svg'):
+        return svg_data_url(path)
+    with open(path, 'rb') as fh:
+        encoded = base64.b64encode(fh.read()).decode('ascii')
+    return f'data:{mime_type};base64,{encoded}'
+
+
 def inline_icon_refs(text):
     if not os.path.isdir(ICON_DIR):
         return text
@@ -78,6 +101,43 @@ def inline_icon_refs(text):
         text = text.replace(f"../icons/{icon_name}", data_url)
         text = text.replace(f"icons/{icon_name}", data_url)
     return text
+
+
+def resolve_renderer_asset(ref, anchor_dir):
+    ref = ref.strip().strip('"\'')
+    if not ref or ref.startswith(('data:', 'http:', 'https:', '#')):
+        return None
+    candidate = os.path.normpath(os.path.join(anchor_dir, ref))
+    if os.path.isfile(candidate):
+        return candidate
+
+    # Some font references in style.css still point at older nested vendor
+    # paths. Fall back to matching by basename so demo packaging remains
+    # self-contained even if the source path changed.
+    basename = os.path.basename(ref)
+    for root, _, files in os.walk(RENDERER_DIR):
+        if basename in files:
+            return os.path.join(root, basename)
+
+    stem, _ = os.path.splitext(basename)
+    if stem:
+        for root, _, files in os.walk(RENDERER_DIR):
+            for name in files:
+                if os.path.splitext(name)[0] == stem:
+                    return os.path.join(root, name)
+    return None
+
+
+def inline_css_url_refs(text, anchor_dir):
+    def replacer(match):
+        raw_ref = match.group(1).strip()
+        asset_path = resolve_renderer_asset(raw_ref, anchor_dir)
+        if not asset_path:
+            return match.group(0)
+        data_url = file_data_url(asset_path)
+        return f'url("{data_url}")'
+
+    return re.sub(r'url\(([^)]+)\)', replacer, text)
 
 prompt_parsed = None
 prompt_raw_text = ''
@@ -119,8 +179,29 @@ for pdir in prompt_search_dirs:
             },
             'checklist': doc.get('checklist', []),
             'review_not_required': doc.get('review_not_required', []),
+            'field_default_values': doc.get('field_default_values', {}),
+            'custom_flags': [],  # Parsed in the browser via parseCustomFlag-equivalent below
             'raw': prompt_raw_text,
         }
+        # Mirror prompt-cache.js:parseCustomFlag so demo gets the same { key, pill, label } shape.
+        raw_flags = doc.get('custom_flags') or []
+        if isinstance(raw_flags, list):
+            import re
+            for raw in raw_flags:
+                if not isinstance(raw, str):
+                    continue
+                s = raw.strip()
+                if not s:
+                    continue
+                m = re.match(r'^\(([^)]+)\)\s*(.*)$', s)
+                if m:
+                    pill = m.group(1).strip()
+                    if not pill:
+                        continue
+                    label = m.group(2).strip() or pill
+                    prompt_parsed['custom_flags'].append({'key': pill, 'pill': pill, 'label': label})
+                else:
+                    prompt_parsed['custom_flags'].append({'key': s, 'pill': s, 'label': s})
         print(f'Loaded prompt: {prompt_name} from {pdir}')
         print(f'  Mapping categories: {list(prompt_parsed["mapping"].keys())}')
         break
@@ -130,8 +211,9 @@ if not prompt_parsed:
 
 field_schema = collect_field_schema(specimens)
 
-css = inline_icon_refs(css)
+css = inline_css_url_refs(css, CSS_DIR)
 app_js = inline_icon_refs(app_js)
+history_js = inline_icon_refs(history_js)
 
 # Build specimen data JS
 specimen_js_data = json.dumps([{
@@ -309,7 +391,9 @@ html = f"""<!DOCTYPE html>
   </div>
   <script>{leaflet_js}</script>
   <script>{mock_api}</script>
+  <script>{theme_defaults_js}</script>
   <script>{completion_js}</script>
+  <script>{special_chars_js}</script>
   <script>{history_js}</script>
   <script>{app_js}</script>
   <script>
@@ -317,7 +401,21 @@ html = f"""<!DOCTYPE html>
     const origRenderFolderPicker = renderFolderPicker;
     renderFolderPicker = function() {{
       const el = document.getElementById('folder-picker-view');
+      // Tear down any previous stripe-gravity loop before replacing the DOM.
+      if (typeof _pickerStripeCleanup !== 'undefined') {{
+        _pickerStripeCleanup?.();
+      }}
+      // Mirror the live app's splash stripes so the curtain loader, wiggle,
+      // and cursor gravity all work in the demo.
+      const stripesHtml = `<div class="picker-stripes" aria-hidden="true">${{
+        Array.from({{ length: 37 }}, (_, i) => {{
+          const offset = Math.abs(i - 18);
+          const dir = i < 18 ? -1 : i > 18 ? 1 : 0;
+          return `<span class="picker-stripe" style="--i:${{i}};--offset:${{offset}};--dir:${{dir}}"></span>`;
+        }}).join('')
+      }}</div>`;
       el.innerHTML = `
+        ${{stripesHtml}}
         <div class="picker-logo">VoucherVisionGO Editor</div>
         <div class="picker-subtitle" style="text-align:left">
           <div style="margin-bottom:6px">&mdash; This is a live demo with herbarium specimens designed to showcase the Editor's utility.</div>
@@ -327,12 +425,15 @@ html = f"""<!DOCTYPE html>
           <div>&mdash; Refresh the page to reset the demo.</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:8px">
-          <label style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Reviewer Name</label>
-          <input type="text" id="picker-username" placeholder="Enter your name" style="width:280px;text-align:center;font-size:14px" value="">
+          <label style="font-size:var(--fs-12);color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">Reviewer Name</label>
+          <input type="text" id="picker-username" placeholder="Enter your name" style="width:280px;text-align:center;font-size:var(--fs-14)" value="">
         </div>
         <button class="btn-primary picker-btn" id="picker-open-btn">Start Demo</button>
-        <div id="picker-error" style="color:var(--error);font-size:12px;margin-top:8px;display:none"></div>
+        <div id="picker-error" style="color:var(--error);font-size:var(--fs-12);margin-top:8px;display:none"></div>
       `;
+      if (typeof setupPickerStripeGravity === 'function') {{
+        _pickerStripeCleanup = setupPickerStripeGravity(el);
+      }}
       document.getElementById('picker-open-btn').addEventListener('click', async () => {{
         const nameInput = document.getElementById('picker-username');
         const name = nameInput.value.trim();
